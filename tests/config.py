@@ -1,5 +1,5 @@
 config = {
-    "device": 'mps',
+    "device": 'cuda',
     'vocab_size': 10000,
     'context_length': 256,
     'd_model': 512,
