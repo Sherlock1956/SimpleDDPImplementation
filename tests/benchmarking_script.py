@@ -4,7 +4,6 @@ from adapters import *
 from config import config
 import numpy as np
 from tqdm import tqdm
-from tensorboardX import SummaryWriter
 import timeit
 device = config['device']
 # 1. prepare model
@@ -23,6 +22,7 @@ def forward_pass_only():
     optimizer.zero_grad()  # 清零梯度
     output = transformer_lm(batched_data_x)
     loss = My_cross_entropy(output, batched_data_y)
+    torch.cuda.synchronize()
     return loss
 
 # 定义反向传播函数（只包括梯度计算）
@@ -33,6 +33,7 @@ def backward_pass():
     output = transformer_lm(batched_data_x)
     loss = My_cross_entropy(output, batched_data_y)
     loss.backward()
+    torch.cuda.synchronize()
 
 
 # 使用timeit测试前向传播时间
@@ -46,23 +47,24 @@ print(f"- 模型参数: {trainable_parameters / 1e9:.4f}B")
 print()
 
 # 测试前向传播时间 (重复10次取平均)
-for _ in range(5):
-    forward_pass_only()
-forward_time = timeit.timeit(forward_pass_only, number=10) / 10
-print(f"前向传播平均时间: {forward_time:.4f} 秒")
+forward_pass_time = []
+for i in range(15):
+    if i > 5:
+        forward_pass_time.append(timeit.timeit(forward_pass_only, number=1))
+    else:
+        timeit.timeit(forward_pass_only, number=1)
+forward_pass_time = np.array(forward_pass_time)
 
 # 测试反向传播时间 (包含前向传播，但主要测量反向传播)
-for _ in range(5):
-    backward_pass()
-backward_time = timeit.timeit(backward_pass, number=10) / 10
-print(f"前向+反向传播时间: {backward_time:.4f} 秒")
-print(f"纯反向传播时间(估算): {backward_time - forward_time:.4f} 秒")
+backward_pass_time = []
+for i in range(25):
+    if i > 15:
+        backward_pass_time.append(timeit.timeit(backward_pass, number=1))
+    else:
+        timeit.timeit(backward_pass, number=1)
+backward_pass_time = np.array(backward_pass_time)
+print(f"前向传播平均时间: {forward_pass_time.mean():.6f} 秒")
+print(f"前向+反向传播时间: {backward_pass_time.mean():.6f} 秒")
+print(f"纯反向传播时间(估算): {(backward_pass_time.mean() - forward_pass_time.mean()):.4f} 秒")
 
-
-print()
-print("时间比例分析:")
-print(f"前向传播时间: {forward_time:.4f} 秒")
-print(f"反向传播时间(估算): {backward_time - forward_time:.4f} 秒")
-print(f"反向传播/前向传播时间比: {(backward_time - forward_time)/forward_time:.2f}")
-print()
 
