@@ -5,6 +5,7 @@ from config import config
 import numpy as np
 from tqdm import tqdm
 import timeit
+import torch.cuda.nvtx as nvtx
 def benchmark(d_model, d_ff, num_layers, num_heads, size):
     device = config['device']
     # 1. prepare model
@@ -35,7 +36,6 @@ def benchmark(d_model, d_ff, num_layers, num_heads, size):
         loss.backward()
         torch.cuda.synchronize()
 
-
     # 使用timeit测试前向传播时间
     print("=== 性能测试 ===")
     print("测试配置:")
@@ -51,19 +51,28 @@ def benchmark(d_model, d_ff, num_layers, num_heads, size):
     # 测试前向传播时间 (重复10次取平均)
     forward_pass_time = []
     for i in range(15):
+        # 使用NVTX标记预热和测试阶段
         if i > 5:
+            nvtx.range_push(f"forward_pass_test_{i}")
             forward_pass_time.append(timeit.timeit(forward_pass_only, number=1))
+            nvtx.range_pop()
         else:
+            nvtx.range_push(f"forward_pass_warmup_{i}")
             timeit.timeit(forward_pass_only, number=1)
+            nvtx.range_pop()
     forward_pass_time = np.array(forward_pass_time)
 
     # 测试反向传播时间 (包含前向传播，但主要测量反向传播)
     backward_pass_time = []
     for i in range(25):
         if i > 15:
+            nvtx.range_push(f"backward_pass_test_{i}")
             backward_pass_time.append(timeit.timeit(backward_pass, number=1))
+            nvtx.range_pop()
         else:
+            nvtx.range_push(f"backward_pass_warmup_{i}")
             timeit.timeit(backward_pass, number=1)
+            nvtx.range_pop()
     backward_pass_time = np.array(backward_pass_time)
     print(f"前向传播平均时间: {forward_pass_time.mean():.6f} 秒")
     print(f"前向+反向传播时间: {backward_pass_time.mean():.6f} 秒")
@@ -77,7 +86,7 @@ if __name__ == "__main__":
         "num_heads":[12, 16, 20, 25, 32],
         "size":['small','medium','large','xl','2.7B']
     }
-    for i in range(5):
+    for i in range(1):
         d_model = model_size_dict['d_model'][i]
         d_ff = model_size_dict['d_ff'][i]
         num_layers = model_size_dict['num_layers'][i]

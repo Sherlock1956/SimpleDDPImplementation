@@ -194,6 +194,7 @@ requires-dist = [
     { name = "pytest", specifier = ">=8" },
     { name = "regex", specifier = ">=2024.11.6" },
     { name = "tensorboardx", specifier = ">=2.6.4" },
+    { name = "torch", specifier = ">=2.2.2" },
     { name = "torch", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'", specifier = "~=2.6.0" },
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'", specifier = "~=2.2.2" },
     { name = "tqdm", specifier = ">=4.67.1" },
