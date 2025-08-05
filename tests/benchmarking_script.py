@@ -1,4 +1,5 @@
 from basic_modules import *
+import basic_modules
 import torch
 from adapters import *
 from config import config
@@ -6,7 +7,21 @@ import numpy as np
 from tqdm import tqdm
 import timeit
 import torch.cuda.nvtx as nvtx
+@nvtx.range("scaled dot product attention")
+def annotated_scaled_dot_product_attention(q, k, v, mask=None, softmax=torch.softmax):
+    # q: ([8, 12, 256, 64]), k: ([8, 12, 256, 64]), v: ([8, 12, 256, 64])
+    d_k = q.shape[-1]
+    with nvtx.range("computing attention scores"):
+        attention = q @ k.transpose(-1,-2) / d_k ** 0.5
+    if mask is not None:
+        attention = attention.masked_fill(~mask, float('-inf'))
+    with nvtx.range("computing softmax"):
+        result = softmax(attention,dim=-1)
+    with nvtx.range("final matmul"):
+        result = result @ v
+    return result
 def benchmark(d_model, d_ff, num_layers, num_heads, size):
+    basic_modules.scaled_dot_product_attention = annotated_scaled_dot_product_attention
     device = config['device']
     # 1. prepare model
     transformer_lm = My_transformer_lm(vocab_size=config['vocab_size'], context_length=config['context_length'], d_model=d_model, num_layers=num_layers, num_heads=num_heads, d_ff=d_ff, rope_theta=config['rope_theta'])
@@ -34,6 +49,17 @@ def benchmark(d_model, d_ff, num_layers, num_heads, size):
         output = transformer_lm(batched_data_x)
         loss = My_cross_entropy(output, batched_data_y)
         loss.backward()
+        torch.cuda.synchronize()
+
+    # 定义反向传播函数（只包括梯度计算）
+    def backward_pass_full():
+        """纯反向传播函数 - 只包括梯度计算"""
+        # 每次都重新计算前向传播，然后只测量反向传播时间
+        optimizer.zero_grad()
+        output = transformer_lm(batched_data_x)
+        loss = My_cross_entropy(output, batched_data_y)
+        loss.backward()
+        optimizer.step()
         torch.cuda.synchronize()
 
     # 使用timeit测试前向传播时间
@@ -74,9 +100,23 @@ def benchmark(d_model, d_ff, num_layers, num_heads, size):
             timeit.timeit(backward_pass, number=1)
             nvtx.range_pop()
     backward_pass_time = np.array(backward_pass_time)
+
+    # 测试反向传播时间 (包含前向传播，但主要测量反向传播，包含优化器更新)
+    backward_opt_pass_time = []
+    for i in range(25):
+        if i > 15:
+            nvtx.range_push(f"backward_pass_opt_test_{i}")
+            backward_opt_pass_time.append(timeit.timeit(backward_pass_full, number=1))
+            nvtx.range_pop()
+        else:
+            nvtx.range_push(f"backward_pass_opt_warmup_{i}")
+            timeit.timeit(backward_pass_full, number=1)
+            nvtx.range_pop()
+    backward_opt_pass_time = np.array(backward_opt_pass_time)
     print(f"前向传播平均时间: {forward_pass_time.mean():.6f} 秒")
     print(f"前向+反向传播时间: {backward_pass_time.mean():.6f} 秒")
     print(f"纯反向传播时间(估算): {(backward_pass_time.mean() - forward_pass_time.mean()):.4f} 秒")
+    print(f"完整一步更新时间: {(backward_opt_pass_time.mean()):.4f} 秒")
 
 if __name__ == "__main__":
     model_size_dict = {

@@ -217,23 +217,28 @@ class My_RoPE(nn.Module):
 class My_softmax(nn.Module):
     def __init__(self):
         super().__init__()
-    def forward(self, x, dimension=-1):
-        max_vec = torch.max(x, dim=dimension, keepdim=True)[0]
+    def forward(self, x, dim=-1):
+        # x: ([8, 12, 256, 256])
+        # FLOPS: 8 * 12 * 256 * 256 * 3
+        max_vec = torch.max(x, dim=dim, keepdim=True)[0]
         x -= max_vec
-        result = torch.exp(x) / torch.sum(torch.exp(x),dim=dimension,keepdim=True)
+        result = torch.exp(x) / torch.sum(torch.exp(x),dim=dim,keepdim=True)
         return result
- 
+def scaled_dot_product_attention(q, k, v, mask=None, softmax=torch.softmax):
+    d_k = q.shape[-1]
+    attention = q @ k.transpose(-1,-2) / d_k ** 0.5
+    if mask is not None:
+        attention = attention.masked_fill(~mask, float('-inf'))
+    result = softmax(attention,dim=-1)
+    result = result @ v
+    return result
+
 class My_scaled_dot_product_attention(nn.Module):
     def __init__(self):
         super().__init__()
         self.softmax = My_softmax()
     def forward(self, q, k, v, mask=None):
-        d_k = q.shape[-1]
-        attention = q @ k.transpose(-1,-2) / d_k ** 0.5
-        if mask is not None:
-            attention = attention.masked_fill(~mask, float('-inf'))
-        result = self.softmax(attention, dimension=-1) @ v
-        return result
+        return scaled_dot_product_attention(q, k, v, mask, self.softmax)
 class My_multihead_attention(nn.Module):
     def __init__(self, d_model, num_head, max_seq_len=None, theta=None, token_positions=None):
         super().__init__()
