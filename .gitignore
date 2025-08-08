@@ -166,3 +166,4 @@ data/
 .DS_Store
 models/
 learning/
+result*

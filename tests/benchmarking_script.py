@@ -51,10 +51,8 @@ def benchmark(d_model, d_ff, num_layers, num_heads, size):
         loss.backward()
         torch.cuda.synchronize()
 
-    # 定义反向传播函数（只包括梯度计算）
+    # 定义反向传播函数
     def backward_pass_full():
-        """纯反向传播函数 - 只包括梯度计算"""
-        # 每次都重新计算前向传播，然后只测量反向传播时间
         optimizer.zero_grad()
         output = transformer_lm(batched_data_x)
         loss = My_cross_entropy(output, batched_data_y)
@@ -79,9 +77,12 @@ def benchmark(d_model, d_ff, num_layers, num_heads, size):
     for i in range(15):
         # 使用NVTX标记预热和测试阶段
         if i > 5:
+            torch.cuda.memory._record_memory_history(max_entries=1000000)
             nvtx.range_push(f"forward_pass_test_{i}")
             forward_pass_time.append(timeit.timeit(forward_pass_only, number=1))
             nvtx.range_pop()
+            torch.cuda.memory._dump_snapshot("result_memory_of_forward_only_full_precision.pickle")
+            torch.cuda.memory._record_memory_history(enabled=None)
         else:
             nvtx.range_push(f"forward_pass_warmup_{i}")
             timeit.timeit(forward_pass_only, number=1)
@@ -105,9 +106,12 @@ def benchmark(d_model, d_ff, num_layers, num_heads, size):
     backward_opt_pass_time = []
     for i in range(25):
         if i > 15:
+            torch.cuda.memory._record_memory_history(max_entries=1000000)
             nvtx.range_push(f"backward_pass_opt_test_{i}")
             backward_opt_pass_time.append(timeit.timeit(backward_pass_full, number=1))
             nvtx.range_pop()
+            torch.cuda.memory._dump_snapshot("result_memory_of_full_step_full_precision.pickle")
+            torch.cuda.memory._record_memory_history(enabled=None)
         else:
             nvtx.range_push(f"backward_pass_opt_warmup_{i}")
             timeit.timeit(backward_pass_full, number=1)
