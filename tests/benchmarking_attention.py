@@ -11,25 +11,32 @@ def timer(name: str):
     yield
     torch.cuda.synchronize()  # Ensure GPU finishes
     print(f"{name} took {(time.time() - start)*1000:.2f} ms")
-
+class Attention(nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, Q, K, V):
+        d_k = Q.size(-1)
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / d_k**0.5
+        attn = torch.softmax(scores, dim=-1)
+        return torch.matmul(attn, V)
 # Simple scaled dot-product attention (no masking, no multi-head)
-def attention(Q, K, V):
-    d_k = Q.size(-1)
-    scores = torch.matmul(Q, K.transpose(-2, -1)) / d_k**0.5
-    attn = torch.softmax(scores, dim=-1)
-    return torch.matmul(attn, V)
+# def attention(Q, K, V):
+#     d_k = Q.size(-1)
+#     scores = torch.matmul(Q, K.transpose(-2, -1)) / d_k**0.5
+#     attn = torch.softmax(scores, dim=-1)
+#     return torch.matmul(attn, V)
 
 # Warm-up function
-def warmup(steps=10):
+def warmup(steps=10, model=None):
     for _ in range(steps):
         with torch.no_grad():
-            _ = attention(torch.randn(8, 1024, 64, device='cuda'),
+            _ = model(torch.randn(8, 1024, 64, device='cuda'),
                           torch.randn(8, 1024, 64, device='cuda'),
                           torch.randn(8, 1024, 64, device='cuda'))
         torch.cuda.synchronize()
 
 # Benchmark function
-def benchmark_attention(d_model, seq_len):
+def benchmark_attention(d_model, seq_len, model):
     print(f"\nBenchmarking d_model={d_model}, seq_len={seq_len}...")
 
     # Allocate inputs
@@ -39,7 +46,7 @@ def benchmark_attention(d_model, seq_len):
 
     # Warm-up forward
     for _ in range(10):
-        out = attention(Q, K, V)
+        out = model(Q, K, V)
         out.sum().backward()
         Q.grad.zero_(); K.grad.zero_(); V.grad.zero_()
     torch.cuda.synchronize()
@@ -47,7 +54,7 @@ def benchmark_attention(d_model, seq_len):
     # === Forward timing ===
     with timer("100 forward passes"):
         for _ in range(100):
-            out = attention(Q, K, V)
+            out = model(Q, K, V)
             torch.cuda.synchronize()
 
     # === Memory measurement before backward ===
@@ -59,7 +66,7 @@ def benchmark_attention(d_model, seq_len):
     # === Backward timing ===
     with timer("100 backward passes"):
         for _ in range(100):
-            out = attention(Q, K, V)
+            out = model(Q, K, V)
             out.sum().backward()
             Q.grad.zero_(); K.grad.zero_(); V.grad.zero_()
             torch.cuda.synchronize()
@@ -73,9 +80,13 @@ if __name__ == "__main__":
     device = torch.device('cuda')
     print(f"Using device: {torch.cuda.get_device_name(0)}")
 
+    # Model
+    model = Attention()
+    model = torch.compile(model)
+
     # Warm up GPU
     print("Warming up...")
-    warmup()
+    warmup(model=model)
 
     # Parameters
     d_models = [16, 32, 64, 128]
@@ -87,7 +98,7 @@ if __name__ == "__main__":
             with torch.no_grad():
                 torch.cuda.reset_peak_memory_stats()
                 torch.cuda.empty_cache()
-            benchmark_attention(d_model, seq_len)
+            benchmark_attention(d_model, seq_len, model=model)
         except RuntimeError as e:
             if "out of memory" in str(e):
                 print(f"OOM error for d_model={d_model}, seq_len={seq_len}")
