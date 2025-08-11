@@ -73,8 +73,7 @@ def flash_fwd_kernel(
     Q_i = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
     Q_i = tl.cast(Q_i, tl.float32)
     for j in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
-        j_start = j * K_TILE_SIZE  # python 普通数
-
+        j_start = j * K_TILE_SIZE  
         # 创建 key index 向量并判断哪些是有效（< N_KEYS）
         k_idx = tl.arange(0, K_TILE_SIZE) + j_start  # shape (K_TILE_SIZE,)
         valid_k = k_idx < N_KEYS                      # boolean mask shape (K_TILE_SIZE,)
@@ -83,11 +82,17 @@ def flash_fwd_kernel(
         K_j = tl.cast(K_j, tl.float32) # 数据类型
         V_j = tl.cast(V_j, tl.float32)
         S_i = tl.dot(Q_i, tl.trans(K_j)) * scale
-        # mask operation to be done
-
+        # mask operation 
+        if is_causal:
+            # 计算块中元素在S中的的行数
+            q_idx = tl.arange(0, Q_TILE_SIZE) + query_tile_index * Q_TILE_SIZE  # shape (Q_TILE_SIZE,)
+            # 计算块中元素在S中的的列数 
+            k_idx_tile = tl.arange(0, K_TILE_SIZE) + j_start  # shape (K_TILE_SIZE,)
+            # 行数大于列数就被mask，合理利用广播机制
+            causal_mask = q_idx[:, None] >= k_idx_tile[None, :]  # shape (Q_TILE_SIZE, K_TILE_SIZE)
+            # Apply causal mask: add -1e6 to masked out elements
+            S_i = tl.where(causal_mask, S_i, S_i - 1e6)
         S_i = tl.where(valid_k[None,:], S_i, -float("inf"))
-
-        ###########################
         m_i_old = m_i
         m_i = tl.maximum(m_i_old, tl.max(S_i, axis=-1))
         P_i = tl.exp(S_i - m_i[:, None]) # triton中不能用...,None
