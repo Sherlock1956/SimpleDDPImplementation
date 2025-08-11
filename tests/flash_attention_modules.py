@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import timeit
 def self_attention(Q, K, V):
     d = Q.shape[-1]
     attention = (Q @ K.transpose(-1, -2)) / d ** 0.5
@@ -44,21 +45,22 @@ class Flash_attention_pytorch(torch.autograd.Function):
     @staticmethod
     def backward(ctx):
         raise NotImplementedError
+def apply_flash_atn_pt(Q, K, V):
+    return Flash_attention_pytorch.apply(Q, K, V)
 if __name__ == "__main__":
-    Q = torch.rand(8, 1024, 64)
-    K = torch.rand(8, 1024, 64)
-    V = torch.rand(8, 1024, 64)
-    O_FA_pt = Flash_attention_pytorch.apply(Q, K, V)
-    O_pt = self_attention(Q, K, V)
-    
-    print("Flash Attention shape:", O_FA_pt.shape)
-    print("Standard Attention shape:", O_pt.shape)
-    print("Max difference:", torch.max(torch.abs(O_FA_pt - O_pt)).item())
-    print("Mean difference:", torch.mean(torch.abs(O_FA_pt - O_pt)).item())
-    print("Are they close?", torch.allclose(O_FA_pt, O_pt, atol=1e-5))
-    
-    # Print some sample values for debugging
-    print("\nFirst few values of Flash Attention:")
-    print(O_FA_pt[0, 0, :5])
-    print("First few values of Standard Attention:")
-    print(O_pt[0, 0, :5])
+    seq_len_list = [256, 1024, 4096, 8192, 16384]
+    for _ in range(5):
+        self_attention(torch.rand(1, 4096, 64),torch.rand(1, 4096, 64),torch.rand(1, 4096, 64))
+    Q = torch.rand(8, 16384, 64)
+    K = torch.rand(8, 16384, 64)
+    V = torch.rand(8, 16384, 64)
+    attention_pt = self_attention(Q, K, V)
+    attention_flash = apply_flash_atn_pt(Q, K, V)
+    assert torch.allclose(attention_flash, attention_pt, rtol=1e-5)
+    for seq_len in seq_len_list:
+        Q = torch.rand(8, seq_len, 64)
+        K = torch.rand(8, seq_len, 64)
+        V = torch.rand(8, seq_len, 64)
+        pytorch_time = timeit.timeit(lambda: self_attention(Q, K, V), number=1)
+        flash_time = timeit.timeit(lambda: apply_flash_atn_pt(Q, K, V), number=1)
+        print(f"Seq_len: {seq_len}, PyTorch time: {pytorch_time:.4f}s, Flash time: {flash_time:.4f}s")
