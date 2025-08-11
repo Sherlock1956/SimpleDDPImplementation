@@ -14,10 +14,10 @@ class Flash_attention_pytorch(torch.autograd.Function):
         N_k = K.shape[-2]
         B_q = 64
         B_k = 192
-        O = torch.zeros_like(Q)
-        l = torch.zeros(Q.shape[:-1])
-        m = torch.zeros(Q.shape[:-1]) - torch.inf
-        L = torch.zeros(Q.shape[:-1])
+        O = torch.zeros_like(Q,device=Q.device)
+        l = torch.zeros(Q.shape[:-1],device=Q.device)
+        m = torch.zeros(Q.shape[:-1],device=Q.device) - torch.inf
+        L = torch.zeros(Q.shape[:-1],device=Q.device)
         i_max = int(np.ceil(N_q / B_q))
         j_max = int(np.ceil(N_k / B_k))
         for i in range(i_max):
@@ -49,19 +49,20 @@ class Flash_attention_pytorch(torch.autograd.Function):
 def apply_flash_atn_pt(Q, K, V):
     return Flash_attention_pytorch.apply(Q, K, V)
 if __name__ == "__main__":
+    device = 'cuda'
     seq_len_list = [256, 1024, 4096, 8192, 16384]
     for _ in range(5):
         self_attention(torch.rand(1, 4096, 64),torch.rand(1, 4096, 64),torch.rand(1, 4096, 64))
-    Q = torch.rand(8, 16384, 64)
-    K = torch.rand(8, 16384, 64)
-    V = torch.rand(8, 16384, 64)
+    Q = torch.rand(4, 16384, 64).to('cuda')
+    K = torch.rand(4, 16384, 64).to('cuda')
+    V = torch.rand(4, 16384, 64).to('cuda')
     attention_pt = self_attention(Q, K, V)
     attention_flash = apply_flash_atn_pt(Q, K, V)
     assert torch.allclose(attention_flash, attention_pt, rtol=1e-5)
     for seq_len in seq_len_list:
-        Q = torch.rand(8, seq_len, 64)
-        K = torch.rand(8, seq_len, 64)
-        V = torch.rand(8, seq_len, 64)
+        Q = torch.rand(8, seq_len, 64).to('cuda')
+        K = torch.rand(8, seq_len, 64).to('cuda')
+        V = torch.rand(8, seq_len, 64).to('cuda')
         pytorch_time = timeit.timeit(lambda: self_attention(Q, K, V), number=1)
         flash_time = timeit.timeit(lambda: apply_flash_atn_pt(Q, K, V), number=1)
         print(f"Seq_len: {seq_len}, PyTorch time: {pytorch_time:.4f}s, Flash time: {flash_time:.4f}s")
