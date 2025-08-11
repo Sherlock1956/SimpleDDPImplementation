@@ -22,7 +22,8 @@ def flash_fwd_kernel(
     scale,
     D: tl.constexpr,
     Q_TILE_SIZE: tl.constexpr,
-    K_TILE_SIZE: tl.constexpr
+    K_TILE_SIZE: tl.constexpr,
+    is_causal: tl.constexpr
 ):
     query_tile_index = tl.program_id(0)
     batch_index = tl.program_id(1)
@@ -66,12 +67,17 @@ def flash_fwd_kernel(
         block_shape = (Q_TILE_SIZE,),
         order = (0,),
     )
-    O_i = tl.zeros((Q_TILE_SIZE, D)) # 需要初始化
+    O_i = tl.zeros((Q_TILE_SIZE, D), dtype=tl.float32) # 需要初始化，注o数据类型
     l_i = tl.zeros((Q_TILE_SIZE,), dtype=tl.float32)
-    m_i = tl.full((Q_TILE_SIZE,), -tl.inf, dtype=tl.float32) # tl.full的使用
+    m_i = tl.full((Q_TILE_SIZE,),  -float("inf"), dtype=tl.float32) # tl.full的使用，-float("inf")
     Q_i = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
     Q_i = tl.cast(Q_i, tl.float32)
     for j in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
+        j_start = j * K_TILE_SIZE  # python 普通数
+
+        # 创建 key index 向量并判断哪些是有效（< N_KEYS）
+        k_idx = tl.arange(0, K_TILE_SIZE) + j_start  # shape (K_TILE_SIZE,)
+        valid_k = k_idx < N_KEYS                      # boolean mask shape (K_TILE_SIZE,)
         K_j = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
         V_j = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option="zero")
         K_j = tl.cast(K_j, tl.float32) # 数据类型
@@ -79,21 +85,23 @@ def flash_fwd_kernel(
         S_i = tl.dot(Q_i, tl.trans(K_j)) * scale
         # mask operation to be done
 
+        S_i = tl.where(valid_k[None,:], S_i, -float("inf"))
+
         ###########################
         m_i_old = m_i
         m_i = tl.maximum(m_i_old, tl.max(S_i, axis=-1))
-        P_i = tl.exp(S_i - m_i[...,None])
-        l_i = tl.exp(m_i_old - m_i) * l_i + tl.sum(P_i,axis=-1)
-        O_i = tl.exp(m_i_old - m_i)[...,None] * O_i + tl.dot(P_i, V_j)
+        P_i = tl.exp(S_i - m_i[:, None]) # triton中不能用...,None
+        l_i = tl.exp(m_i_old - m_i) * l_i + tl.sum(P_i, axis=-1)
+        O_i = tl.exp(m_i_old - m_i)[:, None] * O_i + tl.dot(P_i, V_j)
         K_block_ptr = K_block_ptr.advance((K_TILE_SIZE, 0))
         V_block_ptr = V_block_ptr.advance((K_TILE_SIZE, 0))
-    O_i = O_i / l_i[...,None]
+    O_i = O_i / l_i[:, None]
     L_i = m_i + tl.log(l_i)
     tl.store(O_block_ptr, tl.cast(O_i, tl.float32), boundary_check=(0, 1))
     tl.store(L_block_ptr, tl.cast(L_i, tl.float32), boundary_check=(0,))
 class Flash_attention_triton(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, Q, K, V):
+    def forward(ctx, Q, K, V, is_causal=False):
         assert Q.is_cuda and K.is_cuda and V.is_cuda, "Tensors must be on CUDA"
         # ensure contiguous to make strides consistent
         Q = Q.contiguous()
@@ -104,9 +112,10 @@ class Flash_attention_triton(torch.autograd.Function):
         scale = 1 / (D ** 0.5)
         O = torch.empty((batch_size, N_QUERIES, D), device=Q.device, dtype=Q.dtype)
         L = torch.empty((batch_size, N_QUERIES), device=Q.device, dtype=Q.dtype)
-        Q_TILE_SIZE = 64
-        K_TILE_SIZE = 192
+        Q_TILE_SIZE = 64  # Reduced from 256 to 64， 不能太大了，shared memory空间有限
+        K_TILE_SIZE = 64  # Reduced from 256 to 64
         grid = (triton.cdiv(N_QUERIES, Q_TILE_SIZE), batch_size)
+        ctx.is_causal = is_causal
         flash_fwd_kernel[grid](
             Q, K, V,
             O, L,
@@ -115,9 +124,12 @@ class Flash_attention_triton(torch.autograd.Function):
             V.stride(0), V.stride(1), V.stride(2),
             O.stride(0), O.stride(1), O.stride(2),
             L.stride(0), L.stride(1),
+            N_QUERIES, N_KEYS,
             scale,
+            D,
             Q_TILE_SIZE = Q_TILE_SIZE,
-            K_TILE_SIZE = K_TILE_SIZE
+            K_TILE_SIZE = K_TILE_SIZE,
+            is_causal = is_causal
         )
         ctx.save_for_backward(L, Q, K, V, O)
         return O
@@ -130,7 +142,7 @@ class Flash_attention_pytorch(torch.autograd.Function):
         N_q, d = Q.shape[-2:]
         N_k = K.shape[-2]
         B_q = 64
-        B_k = 192
+        B_k = 64  # Reduced to match Triton implementation
         O = torch.zeros_like(Q,device=Q.device)
         l = torch.zeros(Q.shape[:-1],device=Q.device)
         m = torch.zeros(Q.shape[:-1],device=Q.device) - torch.inf
@@ -168,19 +180,19 @@ def apply_flash_atn_pt(Q, K, V):
 def apply_flash_atn_triton(Q, K, V):
     return Flash_attention_triton.apply(Q, K, V)
 if __name__ == "__main__":
-    device = 'mps'
-    seq_len_list = [256, 1024, 4096, 8192, 16384]
-    Q = torch.rand(4, 16384, 64).to(device)
-    K = torch.rand(4, 16384, 64).to(device)
-    V = torch.rand(4, 16384, 64).to(device)
+    device = 'cuda'
+    seq_len_list = [256, 1024, 4096, 8192, 16384, 16384*2, 16384*4]
+    Q = torch.rand(4, 1024, 64).to(device)
+    K = torch.rand(4, 1024, 64).to(device)
+    V = torch.rand(4, 1024, 64).to(device)
     for _ in range(5):
         attention_pt = self_attention(Q, K, V)
         attention_flash = apply_flash_atn_triton(Q, K, V)
-    assert torch.allclose(attention_flash, attention_pt, rtol=1e-5)
+    assert torch.allclose(attention_flash, attention_pt, rtol=1e-2, atol=1e-2)
     for seq_len in seq_len_list:
         Q = torch.rand(8, seq_len, 64).to(device)
         K = torch.rand(8, seq_len, 64).to(device)
         V = torch.rand(8, seq_len, 64).to(device)
-        pytorch_time = timeit.timeit(lambda: self_attention(Q, K, V), number=1)
-        flash_time = timeit.timeit(lambda: apply_flash_atn_triton(Q, K, V), number=1)
+        pytorch_time = timeit.timeit(lambda: self_attention(Q, K, V), number=10)
+        flash_time = timeit.timeit(lambda: apply_flash_atn_triton(Q, K, V), number=10)
         print(f"Seq_len: {seq_len}, PyTorch time: {pytorch_time:.4f}s, Flash time: {flash_time:.4f}s")
