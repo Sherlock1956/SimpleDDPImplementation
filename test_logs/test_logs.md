@@ -293,3 +293,39 @@ layer norm需要计算方差，均值，对数值敏感，而fp16动态范围小
 
 [推荐观看b站视频](https://www.bilibili.com/video/BV1UT421k7rA/?spm_id_from=333.1391.0.0&vd_source=cacd898e44cd6114d93337514538a038)
 
+# flash_forward
+
+(a)用pytorch实现flash attention2的操作
+
+理解flash attention的操作之后再写代码就不困难了，写好之后可以先与普通的attention操作进行简单对比
+
+```python
+  seq_len_list = [256, 1024, 4096, 8192, 16384]
+  for _ in range(5):
+      self_attention(torch.rand(1, 4096, 64),torch.rand(1, 4096, 64),torch.rand(1, 4096, 64))
+  Q = torch.rand(8, 16384, 64)
+  K = torch.rand(8, 16384, 64)
+  V = torch.rand(8, 16384, 64)
+  attention_pt = self_attention(Q, K, V)
+  attention_flash = apply_flash_atn_pt(Q, K, V)
+  assert torch.allclose(attention_flash, attention_pt, rtol=1e-5)
+  for seq_len in seq_len_list:
+      Q = torch.rand(8, seq_len, 64)
+      K = torch.rand(8, seq_len, 64)
+      V = torch.rand(8, seq_len, 64)
+      pytorch_time = timeit.timeit(lambda: self_attention(Q, K, V), number=1)
+      flash_time = timeit.timeit(lambda: apply_flash_atn_pt(Q, K, V), number=1)
+      print(f"Seq_len: {seq_len}, PyTorch time: {pytorch_time:.4f}s, Flash time: {flash_time:.4f}s")
+```
+
+运行结果如下：
+
+```bash
+Seq_len: 256, PyTorch time: 0.0007s, Flash time: 0.0018s
+Seq_len: 1024, PyTorch time: 0.0149s, Flash time: 0.0211s
+Seq_len: 4096, PyTorch time: 0.1720s, Flash time: 0.2519s
+Seq_len: 8192, PyTorch time: 0.7200s, Flash time: 0.9449s
+Seq_len: 16384, PyTorch time: 40.7145s, Flash time: 4.1237s
+```
+
+发现在seq_len小的时候pytorch 版本的flash attention明显更慢，因为有更多的变量和加载操作，但是在长序列的时候，普通的attention因为需要频繁的IO所以速度会很慢，而flash attention已经有一些优势了，但是这个是在mac电脑上成立，nvidia卡to be tested.

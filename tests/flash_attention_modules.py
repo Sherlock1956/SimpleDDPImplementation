@@ -2,10 +2,11 @@ import torch
 import numpy as np
 import timeit
 def self_attention(Q, K, V):
-    d = Q.shape[-1]
-    attention = (Q @ K.transpose(-1, -2)) / d ** 0.5
-    attention = torch.softmax(attention, dim=-1)
-    return attention @ V
+    d_k = Q.size(-1)
+    scores = torch.matmul(Q, K.transpose(-2, -1)) / d_k**0.5
+    attn = torch.softmax(scores, dim=-1)
+    return torch.matmul(attn, V)
+
 class Flash_attention_pytorch(torch.autograd.Function):
     @staticmethod
     def forward(ctx, Q, K, V, is_causal=False):
