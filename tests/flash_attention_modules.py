@@ -49,20 +49,20 @@ class Flash_attention_pytorch(torch.autograd.Function):
 def apply_flash_atn_pt(Q, K, V):
     return Flash_attention_pytorch.apply(Q, K, V)
 if __name__ == "__main__":
-    device = 'cuda'
+    device = 'mps'
     seq_len_list = [256, 1024, 4096, 8192, 16384]
     for _ in range(5):
         self_attention(torch.rand(1, 4096, 64),torch.rand(1, 4096, 64),torch.rand(1, 4096, 64))
-    Q = torch.rand(4, 16384, 64).to('cuda')
-    K = torch.rand(4, 16384, 64).to('cuda')
-    V = torch.rand(4, 16384, 64).to('cuda')
+    Q = torch.rand(4, 16384, 64).to(device)
+    K = torch.rand(4, 16384, 64).to(device)
+    V = torch.rand(4, 16384, 64).to(device)
     attention_pt = self_attention(Q, K, V)
     attention_flash = apply_flash_atn_pt(Q, K, V)
     assert torch.allclose(attention_flash, attention_pt, rtol=1e-5)
     for seq_len in seq_len_list:
-        Q = torch.rand(8, seq_len, 64).to('cuda')
-        K = torch.rand(8, seq_len, 64).to('cuda')
-        V = torch.rand(8, seq_len, 64).to('cuda')
+        Q = torch.rand(8, seq_len, 64).to(device)
+        K = torch.rand(8, seq_len, 64).to(device)
+        V = torch.rand(8, seq_len, 64).to(device)
         pytorch_time = timeit.timeit(lambda: self_attention(Q, K, V), number=1)
         flash_time = timeit.timeit(lambda: apply_flash_atn_pt(Q, K, V), number=1)
         print(f"Seq_len: {seq_len}, PyTorch time: {pytorch_time:.4f}s, Flash time: {flash_time:.4f}s")

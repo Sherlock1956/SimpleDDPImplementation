@@ -321,11 +321,11 @@ layer norm需要计算方差，均值，对数值敏感，而fp16动态范围小
 运行结果如下：
 
 ```bash
-Seq_len: 256, PyTorch time: 0.0007s, Flash time: 0.0018s
-Seq_len: 1024, PyTorch time: 0.0149s, Flash time: 0.0211s
-Seq_len: 4096, PyTorch time: 0.1720s, Flash time: 0.2519s
-Seq_len: 8192, PyTorch time: 0.7200s, Flash time: 0.9449s
-Seq_len: 16384, PyTorch time: 40.7145s, Flash time: 4.1237s
+Seq_len: 256, PyTorch time: 0.0002s, Flash time: 0.0018s
+Seq_len: 1024, PyTorch time: 0.0002s, Flash time: 0.0130s
+Seq_len: 4096, PyTorch time: 0.0002s, Flash time: 0.1810s
+Seq_len: 8192, PyTorch time: 0.0002s, Flash time: 0.6894s
+Seq_len: 16384, PyTorch time: 0.0956s, Flash time: 2.7439s
 ```
 
-发现在seq_len小的时候pytorch 版本的flash attention明显更慢，因为有更多的变量和加载操作，但是在长序列的时候，普通的attention因为需要频繁的IO所以速度会很慢，而flash attention已经有一些优势了，但是这个是在mac电脑上成立，nvidia卡to be tested.
+发现flash attention的pytorch版本比pytorch本身的实现慢很多，因为有很多IO加载和更多的变量操作，这是符合常理的。
