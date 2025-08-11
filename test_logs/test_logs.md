@@ -288,3 +288,8 @@ layer norm需要计算方差，均值，对数值敏感，而fp16动态范围小
 | 128     | 4096    | 477.61 ms            | 1165.66 ms            | 1674.00 MB      | 640.25 MB        |
 | 128     | 8192    | 1302.41 ms           | 3403.81 ms            | 6378.00 MB      | 2288.25 MB       |
 | 128     | 16384   | OOM                  | OOM                   | OOM             | OOM              |
+
+# Flash attention学习笔记
+
+[推荐观看b站视频](https://www.bilibili.com/video/BV1UT421k7rA/?spm_id_from=333.1391.0.0&vd_source=cacd898e44cd6114d93337514538a038)
+
