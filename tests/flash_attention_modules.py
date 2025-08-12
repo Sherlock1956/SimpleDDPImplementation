@@ -121,6 +121,7 @@ class Flash_attention_triton(torch.autograd.Function):
         K_TILE_SIZE = 64  # Reduced from 256 to 64
         grid = (triton.cdiv(N_QUERIES, Q_TILE_SIZE), batch_size)
         ctx.is_causal = is_causal
+        ctx.scale = scale
         flash_fwd_kernel[grid](
             Q, K, V,
             O, L,
@@ -139,11 +140,24 @@ class Flash_attention_triton(torch.autograd.Function):
         ctx.save_for_backward(L, Q, K, V, O)
         return O
 
-    def backward(ctx):
-        raise NotImplementedError
+    def backward(ctx, grad_O):
+        L, Q, K, V, O = ctx.saved_tensors
+        scale = ctx.scale
+        is_causal = ctx.is_causal
+        D_i = torch.diag(O @ grad_O.transpose(-1, -2))
+        S = (Q @ K.transpose(-1, -2)) * scale
+        P_ij = torch.exp(S - L[...,None])
+        dV = P_ij.transpose(-1, -2) @ grad_O
+        dP = grad_O @ V.transpose(-1, -2)
+        dS_ij = P_ij * (dP - D_i[...,None])
+        dQ = (dS_ij @ K) * scale
+        dK = (dS_ij.transpose(-1, -2) @ Q) * scale
+        return dQ, dK, dV
 class Flash_attention_pytorch(torch.autograd.Function):
     @staticmethod
     def forward(ctx, Q, K, V, is_causal=False):
+        ctx.scale = 1 / d ** 0.5
+        ctx.is_causal = is_causal
         N_q, d = Q.shape[-2:]
         N_k = K.shape[-2]
         B_q = 64
@@ -178,26 +192,47 @@ class Flash_attention_pytorch(torch.autograd.Function):
         ctx.save_for_backward(L, Q, K, V, O)
         return O
     @staticmethod
-    def backward(ctx):
-        raise NotImplementedError
+    def backward(ctx, grad_O):
+        L, Q, K, V, O = ctx.saved_tensors
+        scale = ctx.scale
+        is_causal = ctx.is_causal
+        D_i = torch.diag(O @ grad_O.transpose(-1, -2))
+        S = (Q @ K.transpose(-1, -2)) * scale
+        P_ij = torch.exp(S - L[...,None])
+        dV = P_ij.transpose(-1, -2) @ grad_O
+        dP = grad_O @ V.transpose(-1, -2)
+        dS_ij = P_ij * (dP - D_i[...,None])
+        dQ = (dS_ij @ K) * scale
+        dK = (dS_ij.transpose(-1, -2) @ Q) * scale
+        return dQ, dK, dV
 def apply_flash_atn_pt(Q, K, V):
     return Flash_attention_pytorch.apply(Q, K, V)
 def apply_flash_atn_triton(Q, K, V):
     return Flash_attention_triton.apply(Q, K, V)
 if __name__ == "__main__":
-    device = 'cuda'
-    seq_len_list = [256, 1024, 4096, 8192, 16384, 16384*2, 16384*4]
+    # compare forward pass time of flash attention and regular attention
+    # device = 'cuda'
+    # seq_len_list = [256, 1024, 4096, 8192, 16384, 16384*2, 16384*4]
+    # Q = torch.rand(4, 1024, 64).to(device)
+    # K = torch.rand(4, 1024, 64).to(device)
+    # V = torch.rand(4, 1024, 64).to(device)
+    # for _ in range(5):
+    #     attention_pt = self_attention(Q, K, V)
+    #     attention_flash = apply_flash_atn_triton(Q, K, V)
+    # assert torch.allclose(attention_flash, attention_pt, rtol=1e-2, atol=1e-2)
+    # for seq_len in seq_len_list:
+    #     Q = torch.rand(8, seq_len, 64).to(device)
+    #     K = torch.rand(8, seq_len, 64).to(device)
+    #     V = torch.rand(8, seq_len, 64).to(device)
+    #     pytorch_time = timeit.timeit(lambda: self_attention(Q, K, V), number=10)
+    #     flash_time = timeit.timeit(lambda: apply_flash_atn_triton(Q, K, V), number=10)
+    #     print(f"Seq_len: {seq_len}, PyTorch time: {pytorch_time:.4f}s, Flash time: {flash_time:.4f}s")
+
+    # test backward pass
+    device = 'mps'
     Q = torch.rand(4, 1024, 64).to(device)
     K = torch.rand(4, 1024, 64).to(device)
     V = torch.rand(4, 1024, 64).to(device)
-    for _ in range(5):
-        attention_pt = self_attention(Q, K, V)
-        attention_flash = apply_flash_atn_triton(Q, K, V)
-    assert torch.allclose(attention_flash, attention_pt, rtol=1e-2, atol=1e-2)
-    for seq_len in seq_len_list:
-        Q = torch.rand(8, seq_len, 64).to(device)
-        K = torch.rand(8, seq_len, 64).to(device)
-        V = torch.rand(8, seq_len, 64).to(device)
-        pytorch_time = timeit.timeit(lambda: self_attention(Q, K, V), number=10)
-        flash_time = timeit.timeit(lambda: apply_flash_atn_triton(Q, K, V), number=10)
-        print(f"Seq_len: {seq_len}, PyTorch time: {pytorch_time:.4f}s, Flash time: {flash_time:.4f}s")
+    attention = apply_flash_atn_pt(Q, K, V)
+    loss = attention ** 2
+    loss.backward()
