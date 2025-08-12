@@ -117,8 +117,9 @@ class Flash_attention_triton(torch.autograd.Function):
         scale = 1 / (D ** 0.5)
         O = torch.empty((batch_size, N_QUERIES, D), device=Q.device, dtype=Q.dtype)
         L = torch.empty((batch_size, N_QUERIES), device=Q.device, dtype=Q.dtype)
-        Q_TILE_SIZE = 64  # Reduced from 256 to 64， 不能太大了，shared memory空间有限
-        K_TILE_SIZE = 64  # Reduced from 256 to 64
+        tile_size = 32 if D > 64 else 64
+        Q_TILE_SIZE = 32  # Reduced from 256 to 64， 不能太大了，shared memory空间有限
+        K_TILE_SIZE = 32 # Reduced from 256 to 64
         grid = (triton.cdiv(N_QUERIES, Q_TILE_SIZE), batch_size)
         ctx.is_causal = is_causal
         ctx.scale = scale
@@ -140,20 +141,27 @@ class Flash_attention_triton(torch.autograd.Function):
         ctx.save_for_backward(L, Q, K, V, O)
         return O
 
+    @staticmethod
     def backward(ctx, grad_O):
         L, Q, K, V, O = ctx.saved_tensors
         scale = ctx.scale
         is_causal = ctx.is_causal
+        batch_size,n_queries = Q.shape[:-1]
+        n_keys = K.shape[-2]
         # D_i should be the sum of element-wise multiplication along the last dimension
         D_i = torch.sum(O * grad_O, dim=-1)  # Shape: (batch_size, seq_len)
         S = (Q @ K.transpose(-1, -2)) * scale
+        if is_causal:
+            causal_mask = torch.arange(0,n_queries)[...,None] >= torch.arange(0,n_keys)[...,None,:]
+            causal_mask = causal_mask.to(Q.device)
+            S = torch.where(causal_mask, S, torch.full_like(S, -1e6))
         P_ij = torch.exp(S - L[...,None])
         dV = P_ij.transpose(-1, -2) @ grad_O
         dP = grad_O @ V.transpose(-1, -2)
         dS_ij = P_ij * (dP - D_i[...,None])
         dQ = (dS_ij @ K) * scale
         dK = (dS_ij.transpose(-1, -2) @ Q) * scale
-        return dQ, dK, dV
+        return dQ, dK, dV, None # 输出的梯度个数必须与输入参数数量一致，is_causal的梯度应该是None
 class Flash_attention_pytorch(torch.autograd.Function):
     @staticmethod
     def forward(ctx, Q, K, V, is_causal=False):
@@ -161,8 +169,8 @@ class Flash_attention_pytorch(torch.autograd.Function):
         N_q, d = Q.shape[-2:]
         ctx.scale = 1 / d ** 0.5
         N_k = K.shape[-2]
-        B_q = 64
-        B_k = 64  # Reduced to match Triton implementation
+        B_q = 32
+        B_k = 32  # Reduced to match Triton implementation
         O = torch.zeros_like(Q,device=Q.device)
         l = torch.zeros(Q.shape[:-1],device=Q.device)
         m = torch.zeros(Q.shape[:-1],device=Q.device) - torch.inf
@@ -197,6 +205,8 @@ class Flash_attention_pytorch(torch.autograd.Function):
         L, Q, K, V, O = ctx.saved_tensors
         scale = ctx.scale
         is_causal = ctx.is_causal
+        batch_size,n_queries = Q.shape[:-1]
+        n_keys = K.shape[0-2]
         # D_i should be the sum of element-wise multiplication along the last dimension
         D_i = torch.sum(O * grad_O, dim=-1)  # Shape: (batch_size, seq_len)
         S = (Q @ K.transpose(-1, -2)) * scale
@@ -204,13 +214,17 @@ class Flash_attention_pytorch(torch.autograd.Function):
         dV = P_ij.transpose(-1, -2) @ grad_O
         dP = grad_O @ V.transpose(-1, -2)
         dS_ij = P_ij * (dP - D_i[...,None])
+        if is_causal:
+            causal_mask = torch.arange(0,n_queries)[...,None] >= torch.arange(0,n_keys)[...,None,:]
+            causal_mask = causal_mask.to(Q.device)
+            dS_ij = torch.where(causal_mask, dS_ij, torch.zeros_like(dS_ij))
         dQ = (dS_ij @ K) * scale
         dK = (dS_ij.transpose(-1, -2) @ Q) * scale
         return dQ, dK, dV, None # 输出的梯度个数必须与输入参数数量一致，is_causal的梯度应该是None
-def apply_flash_atn_pt(Q, K, V):
-    return Flash_attention_pytorch.apply(Q, K, V)
-def apply_flash_atn_triton(Q, K, V):
-    return Flash_attention_triton.apply(Q, K, V)
+def apply_flash_atn_pt(Q, K, V, is_causal):
+    return Flash_attention_pytorch.apply(Q, K, V, is_causal)
+def apply_flash_atn_triton(Q, K, V, is_causal):
+    return Flash_attention_triton.apply(Q, K, V, is_causal)
 if __name__ == "__main__":
     # compare forward pass time of flash attention and regular attention
     # device = 'cuda'
@@ -235,6 +249,6 @@ if __name__ == "__main__":
     Q = torch.rand(4, 1024, 64, requires_grad=True).to(device)# 需要写requires_grad
     K = torch.rand(4, 1024, 64, requires_grad=True).to(device)
     V = torch.rand(4, 1024, 64, requires_grad=True).to(device)
-    attention = apply_flash_atn_pt(Q, K, V)
+    attention = apply_flash_atn_pt(Q, K, V, True)
     loss = attention.sum()  # Use sum() instead of ** 2 for a scalar loss
     loss.backward()

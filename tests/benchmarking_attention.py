@@ -3,6 +3,10 @@ import torch.nn as nn
 import time
 import itertools
 from contextlib import contextmanager
+try:
+    from flash_attention_modules import *
+except:
+    from .flash_attention_modules import *
 
 # Context manager for timing
 @contextmanager
@@ -19,6 +23,12 @@ class Attention(nn.Module):
         scores = torch.matmul(Q, K.transpose(-2, -1)) / d_k**0.5
         attn = torch.softmax(scores, dim=-1)
         return torch.matmul(attn, V)
+class Attention_triton(nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, Q, K, V):
+        return apply_flash_atn_triton(Q, K, V, is_causal=False)
+
 # Simple scaled dot-product attention (no masking, no multi-head)
 # def attention(Q, K, V):
 #     d_k = Q.size(-1)
@@ -30,9 +40,9 @@ class Attention(nn.Module):
 def warmup(steps=10, model=None):
     for _ in range(steps):
         with torch.no_grad():
-            _ = model(torch.randn(8, 1024, 64, device='cuda'),
-                          torch.randn(8, 1024, 64, device='cuda'),
-                          torch.randn(8, 1024, 64, device='cuda'))
+            _ = model(torch.randn(1, 1024, 64, device='cuda'),
+                          torch.randn(1, 1024, 64, device='cuda'),
+                          torch.randn(1, 1024, 64, device='cuda'))
         torch.cuda.synchronize()
 
 # Benchmark function
@@ -40,9 +50,9 @@ def benchmark_attention(d_model, seq_len, model):
     print(f"\nBenchmarking d_model={d_model}, seq_len={seq_len}...")
 
     # Allocate inputs
-    Q = torch.randn(8, seq_len, d_model, device='cuda', requires_grad=True)
-    K = torch.randn(8, seq_len, d_model, device='cuda', requires_grad=True)
-    V = torch.randn(8, seq_len, d_model, device='cuda', requires_grad=True)
+    Q = torch.randn(1, seq_len, d_model, device='cuda', requires_grad=True)
+    K = torch.randn(1, seq_len, d_model, device='cuda', requires_grad=True)
+    V = torch.randn(1, seq_len, d_model, device='cuda', requires_grad=True)
 
     # Warm-up forward
     for _ in range(10):
@@ -82,7 +92,7 @@ if __name__ == "__main__":
 
     # Model
     model = Attention()
-    model = torch.compile(model)
+    # model = torch.compile(model)
 
     # Warm up GPU
     print("Warming up...")
