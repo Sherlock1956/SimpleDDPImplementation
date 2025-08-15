@@ -92,7 +92,7 @@ if __name__ == "__main__":
 
     # Model
     model = Attention()
-    # model = torch.compile(model)
+    model = torch.compile(model)
 
     # Warm up GPU
     print("Warming up...")
@@ -105,9 +105,9 @@ if __name__ == "__main__":
     # Cartesian product
     for d_model, seq_len in itertools.product(d_models, seq_lengths):
         try:
-            with torch.no_grad():
-                torch.cuda.reset_peak_memory_stats()
-                torch.cuda.empty_cache()
+            # with torch.no_grad():
+            #     torch.cuda.reset_peak_memory_stats()
+            #     torch.cuda.empty_cache()
             benchmark_attention(d_model, seq_len, model=model)
         except RuntimeError as e:
             if "out of memory" in str(e):

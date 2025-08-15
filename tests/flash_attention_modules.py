@@ -206,7 +206,7 @@ def flash_bwd_dk_dv_kernel(
         dS = P * (dP - D_i[:,None]) # (Q_TILE_SIZE, K_TILE_SIZE)
         dK += tl.dot(tl.trans(dS),Q) * scale
         Q_block_ptr = Q_block_ptr.advance((Q_TILE_SIZE, 0))
-        D_block_ptr = D_block_ptr.advance((Q_TILE_SIZE, 0))
+        D_block_ptr = D_block_ptr.advance((Q_TILE_SIZE,))
         dO_block_ptr = dO_block_ptr.advance((Q_TILE_SIZE, 0))
         L_block_ptr = L_block_ptr.advance((Q_TILE_SIZE,))
     tl.store(dK_block_ptr, dK, boundary_check=(0, 1)) # 注意保存的写法
@@ -320,8 +320,8 @@ class Flash_attention_triton(torch.autograd.Function):
         O = torch.empty((batch_size, N_QUERIES, D), device=Q.device, dtype=Q.dtype)
         L = torch.empty((batch_size, N_QUERIES), device=Q.device, dtype=Q.dtype)
         # tile_size = 32 if D > 64 else 64
-        Q_TILE_SIZE = 32  # Reduced from 256 to 64， 不能太大了，shared memory空间有限
-        K_TILE_SIZE = 32 # Reduced from 256 to 64
+        Q_TILE_SIZE = 16  # Reduced from 256 to 64， 不能太大了，shared memory空间有限
+        K_TILE_SIZE = 16 # Reduced from 256 to 64
         grid = (triton.cdiv(N_QUERIES, Q_TILE_SIZE), batch_size)
         ctx.is_causal = is_causal
         ctx.scale = scale
@@ -478,9 +478,10 @@ if __name__ == "__main__":
 
     # test backward pass
     device = 'cuda'
-    Q = torch.rand(4, 1024, 64, requires_grad=True).to(device)# 需要写requires_grad
-    K = torch.rand(4, 1024, 64, requires_grad=True).to(device)
-    V = torch.rand(4, 1024, 64, requires_grad=True).to(device)
-    attention = apply_flash_atn_pt(Q, K, V, True)
+    Q = torch.rand(1, 16384, 32, requires_grad=True).to(device)# 需要写requires_grad
+    K = torch.rand(1, 16384, 32, requires_grad=True).to(device)
+    V = torch.rand(1, 16384, 32, requires_grad=True).to(device)
+    attention = apply_flash_atn_triton(Q, K, V, True)
     loss = attention.sum()  # Use sum() instead of ** 2 for a scalar loss
     loss.backward()
+    torch.cuda.synchronize()
