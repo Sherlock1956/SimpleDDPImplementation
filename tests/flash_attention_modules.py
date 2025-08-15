@@ -54,7 +54,7 @@ def flash_bwd_dq_kernel(
         K_ptr + batch_index * stride_kb,
         shape = (N_KEYS, D),
         strides = (stride_kk, stride_kd),
-        offsets = (0, 0), # K, V的offsets都应该从0开始，随j遍历
+        offsets = (0, 0), 
         block_shape = (K_TILE_SIZE, D),
         order = (1, 0),
     )
@@ -84,16 +84,16 @@ def flash_bwd_dq_kernel(
     )
     Q = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
     dO = tl.load(dO_block_ptr, boundary_check=(0, 1), padding_option="zero")
-    D_i = tl.load(D_block_ptr, boundary_check=(0,), padding_optino="zero")
-    dS = tl.zeros((Q_TILE_SIZE, D),dtype=tl.float32)
-    dP = tl.zeros((Q_TILE_SIZE, D),dtype=tl.float32)
-    S = tl.zeros((Q_TILE_SIZE, D),dtype=tl.float32)
-    P = tl.zeros((Q_TILE_SIZE, D),dtype=tl.float32)
+    D_i = tl.load(D_block_ptr, boundary_check=(0,), padding_option="zero")
+    l = tl.load(L_block_ptr, boundary_check=(0,), padding_option="zero")
+    dS = tl.zeros((Q_TILE_SIZE, K_TILE_SIZE),dtype=tl.float32) # 注意形状
+    dP = tl.zeros((Q_TILE_SIZE, K_TILE_SIZE),dtype=tl.float32)
+    S = tl.zeros((Q_TILE_SIZE, K_TILE_SIZE),dtype=tl.float32)
+    P = tl.zeros((Q_TILE_SIZE, K_TILE_SIZE),dtype=tl.float32)
     dQ = tl.zeros((Q_TILE_SIZE, D),dtype=tl.float32)
     for j in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
         K = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
         V = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option="zero")
-        l = tl.load(L_block_ptr, boundary_check=(0,), padding_option="zero")
         S = tl.dot(Q, tl.trans(K)) * scale
         P = tl.exp(S - l[:,None])
         dP = tl.dot(dO, tl.trans(V))
@@ -101,7 +101,7 @@ def flash_bwd_dq_kernel(
         dQ += tl.dot(dS, K) * scale
         K_block_ptr = K_block_ptr.advance((K_TILE_SIZE, 0))
         V_block_ptr = V_block_ptr.advance((K_TILE_SIZE, 0))
-    tl.store(dQ_block_ptr, boundary_check=(0, 1))
+    tl.store(dQ_block_ptr, dQ, boundary_check=(0, 1))
 @triton.jit
 def flash_bwd_dk_dv_kernel(
     Q_ptr, K_ptr, V_ptr,
@@ -140,7 +140,7 @@ def flash_bwd_dk_dv_kernel(
         dK_ptr + batch_index * stride_kb,
         shape = (N_KEYS, D),
         strides = (stride_kk, stride_kd),
-        offsets = (key_tile_index*Q_TILE_SIZE, 0),
+        offsets = (key_tile_index*K_TILE_SIZE, 0),
         block_shape = (K_TILE_SIZE, D),
         order = (1, 0),
     )
@@ -148,7 +148,7 @@ def flash_bwd_dk_dv_kernel(
         dV_ptr + batch_index * stride_vb,
         shape = (N_KEYS, D),
         strides = (stride_vk, stride_vd),
-        offsets = (key_tile_index*Q_TILE_SIZE, 0),
+        offsets = (key_tile_index*K_TILE_SIZE, 0),
         block_shape = (K_TILE_SIZE, D),
         order = (1, 0),
     )
@@ -187,16 +187,16 @@ def flash_bwd_dk_dv_kernel(
     K = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero") # (K_TILE_SIZE, D)
     V = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option="zero") # (K_TILE_SIZE, D)
 
-    dS = tl.zeros((Q_TILE_SIZE, D),dtype=tl.float32)
-    dP = tl.zeros((Q_TILE_SIZE, D),dtype=tl.float32)
-    S = tl.zeros((Q_TILE_SIZE, D),dtype=tl.float32)
-    P = tl.zeros((Q_TILE_SIZE, D),dtype=tl.float32)
+    dS = tl.zeros((Q_TILE_SIZE, K_TILE_SIZE),dtype=tl.float32)
+    dP = tl.zeros((Q_TILE_SIZE, K_TILE_SIZE),dtype=tl.float32)
+    S = tl.zeros((Q_TILE_SIZE, K_TILE_SIZE),dtype=tl.float32)
+    P = tl.zeros((Q_TILE_SIZE, K_TILE_SIZE),dtype=tl.float32)
     dK = tl.zeros((K_TILE_SIZE, D),dtype=tl.float32)
     dV = tl.zeros((K_TILE_SIZE, D),dtype=tl.float32)
-    for j in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
+    for j in range(tl.cdiv(N_QUERIES, Q_TILE_SIZE)): # 注意循环条件，以Q作为内循环
         Q = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero") # (Q_TILE_SIZE, D),
         dO = tl.load(dO_block_ptr, boundary_check=(0, 1), padding_option="zero") # (Q_TILE_SIZE, D),
-        D_i = tl.load(D_block_ptr, boundary_check=(0,), padding_optino="zero")# (K_TILE_SIZE,),
+        D_i = tl.load(D_block_ptr, boundary_check=(0,), padding_option="zero")# (Q_TILE_SIZE,),
         l = tl.load(L_block_ptr, boundary_check=(0,), padding_option="zero")
 
         S = tl.dot(Q, tl.trans(K)) * scale # (Q_TILE_SIZE, K_TILE_SIZE)
@@ -208,8 +208,9 @@ def flash_bwd_dk_dv_kernel(
         Q_block_ptr = Q_block_ptr.advance((Q_TILE_SIZE, 0))
         D_block_ptr = D_block_ptr.advance((Q_TILE_SIZE, 0))
         dO_block_ptr = dO_block_ptr.advance((Q_TILE_SIZE, 0))
-    tl.store(dK_block_ptr, boundary_check=(0, 1))
-    tl.store(dV_block_ptr, boundary_check=(0, 1))
+        L_block_ptr = L_block_ptr.advance((Q_TILE_SIZE,))
+    tl.store(dK_block_ptr, dK, boundary_check=(0, 1)) # 注意保存的写法
+    tl.store(dV_block_ptr, dV, boundary_check=(0, 1))
 @triton.jit
 def flash_fwd_kernel(
     Q_ptr, K_ptr, V_ptr,
@@ -318,7 +319,7 @@ class Flash_attention_triton(torch.autograd.Function):
         scale = 1 / (D ** 0.5)
         O = torch.empty((batch_size, N_QUERIES, D), device=Q.device, dtype=Q.dtype)
         L = torch.empty((batch_size, N_QUERIES), device=Q.device, dtype=Q.dtype)
-        tile_size = 32 if D > 64 else 64
+        # tile_size = 32 if D > 64 else 64
         Q_TILE_SIZE = 32  # Reduced from 256 to 64， 不能太大了，shared memory空间有限
         K_TILE_SIZE = 32 # Reduced from 256 to 64
         grid = (triton.cdiv(N_QUERIES, Q_TILE_SIZE), batch_size)
@@ -347,22 +348,52 @@ class Flash_attention_triton(torch.autograd.Function):
         L, Q, K, V, O = ctx.saved_tensors
         scale = ctx.scale
         is_causal = ctx.is_causal
-        batch_size,n_queries = Q.shape[:-1]
-        n_keys = K.shape[-2]
-        # D_i should be the sum of element-wise multiplication along the last dimension
+        batch_size, N_QUERIES, D = Q.shape
+        N_KEYS = K.shape[-2]
         D_i = torch.sum(O * grad_O, dim=-1)  # Shape: (batch_size, seq_len)
+        # triton backward
+        Q_TILE_SIZE = 32  # Reduced from 256 to 64， 不能太大了，shared memory空间有限
+        K_TILE_SIZE = 32 # Reduced from 256 to 64
+        dQ = torch.empty((batch_size, N_QUERIES, D), device=Q.device, dtype=Q.dtype)
+        dK = torch.empty((batch_size, N_KEYS, D), device=Q.device, dtype=Q.dtype)
+        dV = torch.empty((batch_size, N_KEYS, D), device=Q.device, dtype=Q.dtype)
+        # compute dQ
+        grid = (triton.cdiv(N_QUERIES, Q_TILE_SIZE), batch_size)
+        flash_bwd_dq_kernel[grid](
+            Q, K, V,
+            L, grad_O, dQ, D_i, 
+            Q.stride(0), Q.stride(1), Q.stride(2),
+            K.stride(0), K.stride(1), K.stride(2),
+            V.stride(0), V.stride(1), V.stride(2),
+            L.stride(0), L.stride(1),
+            D_i.stride(0), D_i.stride(1),
+            N_QUERIES, N_KEYS,
+            scale,
+            D,
+            Q_TILE_SIZE = Q_TILE_SIZE,
+            K_TILE_SIZE = K_TILE_SIZE,
+            is_causal = is_causal
+        )
+        # compute dK, dV
+        grid = (triton.cdiv(N_KEYS, K_TILE_SIZE), batch_size)
+        flash_bwd_dk_dv_kernel[grid](
+            Q, K, V,
+            L, grad_O, dK, dV, D_i,
+            Q.stride(0), Q.stride(1), Q.stride(2),
+            K.stride(0), K.stride(1), K.stride(2),
+            V.stride(0), V.stride(1), V.stride(2),
+            L.stride(0), L.stride(1),
+            D_i.stride(0), D_i.stride(1),
+            N_QUERIES, N_KEYS,
+            scale,
+            D,
+            Q_TILE_SIZE = Q_TILE_SIZE,
+            K_TILE_SIZE = K_TILE_SIZE,
+            is_causal = is_causal
+        )
+        return dQ, dK, dV, None
+        #################
         S = (Q @ K.transpose(-1, -2)) * scale # 需要对S进行causal mask，后面的P_ij, dS_ij自动就mask了
-        if is_causal:
-            causal_mask = torch.arange(0,n_queries)[...,None] >= torch.arange(0,n_keys)[...,None,:]
-            causal_mask = causal_mask.to(Q.device)
-            S = torch.where(causal_mask, S, torch.full_like(S, -1e6))
-        P_ij = torch.exp(S - L[...,None])
-        dV = P_ij.transpose(-1, -2) @ grad_O
-        dP = grad_O @ V.transpose(-1, -2)
-        dS_ij = P_ij * (dP - D_i[...,None])
-        dQ = (dS_ij @ K) * scale
-        dK = (dS_ij.transpose(-1, -2) @ Q) * scale
-        return dQ, dK, dV, None # 输出的梯度个数必须与输入参数数量一致，is_causal的梯度应该是None
 class Flash_attention_pytorch(torch.autograd.Function):
     @staticmethod
     def forward(ctx, Q, K, V, is_causal=False):
@@ -406,19 +437,19 @@ class Flash_attention_pytorch(torch.autograd.Function):
         L, Q, K, V, O = ctx.saved_tensors
         scale = ctx.scale
         is_causal = ctx.is_causal
-        batch_size,n_queries = Q.shape[:-1]
-        n_keys = K.shape[0-2]
+        batch_size,N_QUERIES = Q.shape[:-1]
+        N_KEYS = K.shape[0-2]
         # D_i should be the sum of element-wise multiplication along the last dimension
         D_i = torch.sum(O * grad_O, dim=-1)  # Shape: (batch_size, seq_len)
-        S = (Q @ K.transpose(-1, -2)) * scale
+        S = (Q @ K.transpose(-1, -2)) * scale # 需要对S进行causal mask，后面的P_ij, dS_ij自动就mask了
+        if is_causal:
+            causal_mask = torch.arange(0,N_QUERIES)[...,None] >= torch.arange(0,N_KEYS)[...,None,:]
+            causal_mask = causal_mask.to(Q.device)
+            S = torch.where(causal_mask, S, torch.full_like(S, -1e6))
         P_ij = torch.exp(S - L[...,None])
         dV = P_ij.transpose(-1, -2) @ grad_O
         dP = grad_O @ V.transpose(-1, -2)
         dS_ij = P_ij * (dP - D_i[...,None])
-        if is_causal:
-            causal_mask = torch.arange(0,n_queries)[...,None] >= torch.arange(0,n_keys)[...,None,:]
-            causal_mask = causal_mask.to(Q.device)
-            dS_ij = torch.where(causal_mask, dS_ij, torch.zeros_like(dS_ij))
         dQ = (dS_ij @ K) * scale
         dK = (dS_ij.transpose(-1, -2) @ Q) * scale
         return dQ, dK, dV, None # 输出的梯度个数必须与输入参数数量一致，is_causal的梯度应该是None
