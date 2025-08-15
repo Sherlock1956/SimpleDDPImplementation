@@ -150,7 +150,7 @@ class Flash_attention_triton(torch.autograd.Function):
         n_keys = K.shape[-2]
         # D_i should be the sum of element-wise multiplication along the last dimension
         D_i = torch.sum(O * grad_O, dim=-1)  # Shape: (batch_size, seq_len)
-        S = (Q @ K.transpose(-1, -2)) * scale
+        S = (Q @ K.transpose(-1, -2)) * scale # 需要对S进行causal mask，后面的P_ij, dS_ij自动就mask了
         if is_causal:
             causal_mask = torch.arange(0,n_queries)[...,None] >= torch.arange(0,n_keys)[...,None,:]
             causal_mask = causal_mask.to(Q.device)
