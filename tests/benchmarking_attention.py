@@ -105,6 +105,7 @@ if __name__ == "__main__":
     # Cartesian product
     for d_model, seq_len in itertools.product(d_models, seq_lengths):
         try:
+            # 这个地方有点奇怪，之前一直没有问题，在我自己实现triton backward之后这里就出现illegal memory access报错
             # with torch.no_grad():
             #     torch.cuda.reset_peak_memory_stats()
             #     torch.cuda.empty_cache()

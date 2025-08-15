@@ -92,9 +92,15 @@ def flash_bwd_dq_kernel(
     P = tl.zeros((Q_TILE_SIZE, K_TILE_SIZE),dtype=tl.float32)
     dQ = tl.zeros((Q_TILE_SIZE, D),dtype=tl.float32)
     for j in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
+        j_start = j * K_TILE_SIZE
         K = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
         V = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option="zero")
         S = tl.dot(Q, tl.trans(K)) * scale
+        if is_causal:
+            q_idx = tl.arange(0, Q_TILE_SIZE) + query_tile_index * Q_TILE_SIZE
+            k_idx = tl.arange(0, K_TILE_SIZE) + j_start
+            causal_mask = q_idx[:,None] >= k_idx[None, :]
+            S = tl.where(causal_mask, S, S - 1e6)
         P = tl.exp(S - l[:,None])
         dP = tl.dot(dO, tl.trans(V))
         dS = P * (dP - D_i[:,None])
@@ -194,12 +200,17 @@ def flash_bwd_dk_dv_kernel(
     dK = tl.zeros((K_TILE_SIZE, D),dtype=tl.float32)
     dV = tl.zeros((K_TILE_SIZE, D),dtype=tl.float32)
     for j in range(tl.cdiv(N_QUERIES, Q_TILE_SIZE)): # 注意循环条件，以Q作为内循环
+        j_start = j * Q_TILE_SIZE
         Q = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero") # (Q_TILE_SIZE, D),
         dO = tl.load(dO_block_ptr, boundary_check=(0, 1), padding_option="zero") # (Q_TILE_SIZE, D),
         D_i = tl.load(D_block_ptr, boundary_check=(0,), padding_option="zero")# (Q_TILE_SIZE,),
         l = tl.load(L_block_ptr, boundary_check=(0,), padding_option="zero")
-
         S = tl.dot(Q, tl.trans(K)) * scale # (Q_TILE_SIZE, K_TILE_SIZE)
+        if is_causal:
+            q_idx = tl.arange(0, Q_TILE_SIZE) + j_start
+            k_idx = tl.arange(0, K_TILE_SIZE) + K_TILE_SIZE * key_tile_index
+            causal_mask = q_idx[:,None] >= k_idx[None, :]
+            S = tl.where(causal_mask, S, S - 1e6)
         P = tl.exp(S - l[:,None])
         dV += tl.dot(tl.trans(P),dO) # (K_TILE_SIZE, D)
         dP = tl.dot(dO, tl.trans(V)) # (Q_TILE_SIZE, K_TILE_SIZE)
