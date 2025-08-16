@@ -34,15 +34,15 @@ run on 4090D autodl platform
 
 (b)在单次前向传播过程中，调用次数最多的是ampere_sgemm_...这个矩阵乘法kernel，一次前向传播调用了85次（small size），如果包含前向和反向传播，也是这个kernel执行次数最多，次数也是85次
 
-![image-20250805130558198](C:\Users\Sherlock\AppData\Roaming\Typora\typora-user-images\image-20250805130558198.png)
+![image-1](./assets/image1.png)
 
-![image-20250805130821730](C:\Users\Sherlock\AppData\Roaming\Typora\typora-user-images\image-20250805130821730.png)
+![image-2](./assets/image2.png)
 
 (c)除了矩阵乘法之后，elementwise_kernel也占了不少的计算，例如加法、乘法、ReLU、Sigmoid 等。这种 kernel 在深度学习中大量出现，因为很多激活函数、loss 函数、张量变换都属于逐元素操作。
 
 (d)测试一轮完整的前向传播+反向传播+优化器更新，占比最多的还是矩阵乘法，但是占比稍微下降，因为优化器更新中有大量的逐元素的更新操作，相比仅前向传播的66.4%占比下降到47.3%
 
-![image-20250805132049031](C:\Users\Sherlock\AppData\Roaming\Typora\typora-user-images\image-20250805132049031.png)
+![image-3](./assets/image3.png)
 
 (e)测试一次前向传播中一个attention中的矩阵乘法和softmax的时间消耗之比和两者FLOPS之比，观察是否有什么现象。
 
@@ -68,7 +68,7 @@ final matmul和computing softmax的FLOPS比例：42.7
 
 final matmul和computing softmax的Time比例：2.2
 
-![image-20250805135156228](C:\Users\Sherlock\AppData\Roaming\Typora\typora-user-images\image-20250805135156228.png)
+![image-4](./assets/image4.png)
 
 **结论：虽然 softmax 的 FLOPS 很小，但由于其 memory-bound、本身结构复杂、指令混合率差，导致执行时间并不成比例地小。相比之下，GEMM 虽然 FLOPS 巨大，但因为其是 compute-bound 且高度优化，反而执行时间较短或与 softmax 相近。**
 
@@ -213,15 +213,15 @@ layer norm需要计算方差，均值，对数值敏感，而fp16动态范围小
 
 全精度
 
-![image-20250808170929398](C:\Users\Sherlock\AppData\Roaming\Typora\typora-user-images\image-20250808170929398.png)
+![image-5](./assets/image5.png)
 
-![image-20250808170942366](C:\Users\Sherlock\AppData\Roaming\Typora\typora-user-images\image-20250808170942366.png)
+![image-6](./assets/image6.png)
 
 混合精度
 
-![image-20250808164939819](C:\Users\Sherlock\AppData\Roaming\Typora\typora-user-images\image-20250808164939819.png)
+![image-7](./assets/image7.png)
 
-![image-20250808164951970](C:\Users\Sherlock\AppData\Roaming\Typora\typora-user-images\image-20250808164951970.png)
+![image-8](./assets/image8.png)
 
 (b)内存峰值是什么？
 
