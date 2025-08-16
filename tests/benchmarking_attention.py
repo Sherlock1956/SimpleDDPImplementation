@@ -77,7 +77,6 @@ def benchmark_attention(d_model, seq_len, model):
         for _ in range(100):
             out = model(Q, K, V)
             out.sum().backward()
-            Q.grad.zero_(); K.grad.zero_(); V.grad.zero_()
             torch.cuda.synchronize()
 
 # Main script
