@@ -58,7 +58,6 @@ def benchmark_attention(d_model, seq_len, model):
     for _ in range(10):
         out = model(Q, K, V)
         out.sum().backward()
-        Q.grad.zero_(); K.grad.zero_(); V.grad.zero_()
     torch.cuda.synchronize()
 
     # === Forward timing ===
@@ -91,8 +90,8 @@ if __name__ == "__main__":
     print(f"Using device: {torch.cuda.get_device_name(0)}")
 
     # Model
-    model = Attention()
-    model = torch.compile(model)
+    model = Attention_triton()
+    # model = torch.compile(model)
 
     # Warm up GPU
     print("Warming up...")

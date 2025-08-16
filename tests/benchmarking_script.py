@@ -7,6 +7,10 @@ import numpy as np
 from tqdm import tqdm
 import timeit
 import torch.cuda.nvtx as nvtx
+try:
+    from benchmarking_attention import *
+except:
+    from .benchmarking_attention import *
 @nvtx.range("scaled dot product attention")
 def annotated_scaled_dot_product_attention(q, k, v, mask=None, softmax=torch.softmax):
     # q: ([8, 12, 256, 64]), k: ([8, 12, 256, 64]), v: ([8, 12, 256, 64])
@@ -22,7 +26,7 @@ def annotated_scaled_dot_product_attention(q, k, v, mask=None, softmax=torch.sof
     return result
 @nvtx.range("triton implemented scaled dot product attention")
 def apply_flash_atn_triton(q, k, v, mask=None, softmax=torch.softmax):
-    return Flash_attention_triton.apply(q, k, v, is_causal=True)
+    return Flash_attention_triton.apply(q, k, v, True)
 def benchmark(d_model, d_ff, num_layers, num_heads, size, type):
     if type == 'normal':
         basic_modules.scaled_dot_product_attention = annotated_scaled_dot_product_attention
@@ -35,7 +39,7 @@ def benchmark(d_model, d_ff, num_layers, num_heads, size, type):
     trainable_parameters = sum(param.numel() for param in transformer_lm.parameters() if param.requires_grad)
     # 2. prepare optimizer
     optimizer = My_AdamW(transformer_lm.parameters(), lr=config['max_lr'])
-    batched_data_x = torch.randint(0,10000,(8,256)).to(config['device'])
+    batched_data_x = torch.randint(0,10000,(1,config['context_length'])).to(config['device'])
     batched_data_y = batched_data_x + 1
 
     # 定义前向传播函数（只包括模型推理和损失计算）
@@ -80,7 +84,7 @@ def benchmark(d_model, d_ff, num_layers, num_heads, size, type):
 
     # 测试前向传播时间 (重复10次取平均)
     forward_pass_time = []
-    for i in range(15):
+    for i in range(10):
         # 使用NVTX标记预热和测试阶段
         if i > 5:
             torch.cuda.memory._record_memory_history(max_entries=1000000)
@@ -97,8 +101,8 @@ def benchmark(d_model, d_ff, num_layers, num_heads, size, type):
 
     # 测试反向传播时间 (包含前向传播，但主要测量反向传播)
     backward_pass_time = []
-    for i in range(25):
-        if i > 15:
+    for i in range(10):
+        if i > 5:
             nvtx.range_push(f"backward_pass_test_{i}")
             backward_pass_time.append(timeit.timeit(backward_pass, number=1))
             nvtx.range_pop()
@@ -109,24 +113,24 @@ def benchmark(d_model, d_ff, num_layers, num_heads, size, type):
     backward_pass_time = np.array(backward_pass_time)
 
     # 测试反向传播时间 (包含前向传播，但主要测量反向传播，包含优化器更新)
-    backward_opt_pass_time = []
-    for i in range(25):
-        if i > 15:
-            torch.cuda.memory._record_memory_history(max_entries=1000000)
-            nvtx.range_push(f"backward_pass_opt_test_{i}")
-            backward_opt_pass_time.append(timeit.timeit(backward_pass_full, number=1))
-            nvtx.range_pop()
-            torch.cuda.memory._dump_snapshot("result_memory_of_full_step_full_precision.pickle")
-            torch.cuda.memory._record_memory_history(enabled=None)
-        else:
-            nvtx.range_push(f"backward_pass_opt_warmup_{i}")
-            timeit.timeit(backward_pass_full, number=1)
-            nvtx.range_pop()
-    backward_opt_pass_time = np.array(backward_opt_pass_time)
+    # backward_opt_pass_time = []
+    # for i in range(25):
+    #     if i > 15:
+    #         torch.cuda.memory._record_memory_history(max_entries=1000000)
+    #         nvtx.range_push(f"backward_pass_opt_test_{i}")
+    #         backward_opt_pass_time.append(timeit.timeit(backward_pass_full, number=1))
+    #         nvtx.range_pop()
+    #         torch.cuda.memory._dump_snapshot("result_memory_of_full_step_full_precision.pickle")
+    #         torch.cuda.memory._record_memory_history(enabled=None)
+    #     else:
+    #         nvtx.range_push(f"backward_pass_opt_warmup_{i}")
+    #         timeit.timeit(backward_pass_full, number=1)
+    #         nvtx.range_pop()
+    # backward_opt_pass_time = np.array(backward_opt_pass_time)
     print(f"前向传播平均时间: {forward_pass_time.mean():.6f} 秒")
     print(f"前向+反向传播时间: {backward_pass_time.mean():.6f} 秒")
     print(f"纯反向传播时间(估算): {(backward_pass_time.mean() - forward_pass_time.mean()):.4f} 秒")
-    print(f"完整一步更新时间: {(backward_opt_pass_time.mean()):.4f} 秒")
+    # print(f"完整一步更新时间: {(backward_opt_pass_time.mean()):.4f} 秒")
 
 if __name__ == "__main__":
     model_size_dict = {
@@ -137,17 +141,20 @@ if __name__ == "__main__":
         "size":['small','medium','large','xl','2.7B']
     }
     print("-------------------------------")
-    print("测试普通attention耗时")
-    for i in range(5):
-        type = "normal"
-        d_model = model_size_dict['d_model'][i]
-        d_ff = model_size_dict['d_ff'][i]
-        num_layers = model_size_dict['num_layers'][i]
-        num_heads = model_size_dict['num_heads'][i]
-        size = model_size_dict['size'][i]
-        benchmark(d_model, d_ff, num_layers, num_heads, size, type)
+    # print("测试普通attention耗时")
+    # for i in range(5):
+    #     type = "normal"
+    #     d_model = model_size_dict['d_model'][i]
+    #     d_ff = model_size_dict['d_ff'][i]
+    #     num_layers = model_size_dict['num_layers'][i]
+    #     num_heads = model_size_dict['num_heads'][i]
+    #     size = model_size_dict['size'][i]
+    #     try:
+    #         benchmark(d_model, d_ff, num_layers, num_heads, size, type)
+    #     except Exception as e:
+    #         print(e)
     print("测试triton实现attention耗时")
-    for i in range(1):
+    for i in range(5):
         type = "triton"
         d_model = model_size_dict['d_model'][i]
         d_ff = model_size_dict['d_ff'][i]
@@ -155,4 +162,8 @@ if __name__ == "__main__":
         num_heads = model_size_dict['num_heads'][i]
         size = model_size_dict['size'][i]
         benchmark(d_model, d_ff, num_layers, num_heads, size, type)
+        try:
+            benchmark(d_model, d_ff, num_layers, num_heads, size, type)
+        except Exception as e:
+            print(e)
     

@@ -1,7 +1,7 @@
 config = {
     "device": 'cuda',
     'vocab_size': 10000,
-    'context_length': 256,
+    'context_length': 1024,
     'd_model': 512,
     'num_layers': 4,
     'num_heads': 16,

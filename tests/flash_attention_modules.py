@@ -325,14 +325,37 @@ class Flash_attention_triton(torch.autograd.Function):
         Q = Q.contiguous()
         K = K.contiguous()
         V = V.contiguous()
-        batch_size, N_QUERIES, D = Q.shape
+        original_shape = Q.shape
+        ctx.original_shape = original_shape
+        N_QUERIES, D = Q.shape[-2:]
         N_KEYS = K.shape[-2]
-        scale = 1 / (D ** 0.5)
-        O = torch.empty((batch_size, N_QUERIES, D), device=Q.device, dtype=Q.dtype)
+        
+        def next_power_of_2(x):
+            return 1 << (x - 1).bit_length()
+        
+        D_padded = next_power_of_2(D)
+        ctx.D_original = D
+        ctx.D_padded = D_padded
+        
+        # Pad tensors if necessary
+        if D_padded != D:
+            pad_size = D_padded - D
+            Q = torch.nn.functional.pad(Q, (0, pad_size), mode='constant', value=0)
+            K = torch.nn.functional.pad(K, (0, pad_size), mode='constant', value=0)
+            V = torch.nn.functional.pad(V, (0, pad_size), mode='constant', value=0)
+        
+        Q = Q.view(-1, N_QUERIES, D_padded) # 这一步必须要做，不然会有illegal memory access的问题
+        K = K.view(-1, N_KEYS, D_padded)
+        V = V.view(-1, N_KEYS, D_padded)
+        batch_size = Q.shape[0]
+        scale = 1 / (D ** 0.5)  # Use original D for scale
+        O = torch.empty((batch_size, N_QUERIES, D_padded), device=Q.device, dtype=Q.dtype)
         L = torch.empty((batch_size, N_QUERIES), device=Q.device, dtype=Q.dtype)
         # tile_size = 32 if D > 64 else 64
         Q_TILE_SIZE = 16  # Reduced from 256 to 64， 不能太大了，shared memory空间有限
         K_TILE_SIZE = 16 # Reduced from 256 to 64
+        Q_TILE_SIZE = min(Q_TILE_SIZE, N_QUERIES)
+        K_TILE_SIZE = min(K_TILE_SIZE, N_KEYS)
         grid = (triton.cdiv(N_QUERIES, Q_TILE_SIZE), batch_size)
         ctx.is_causal = is_causal
         ctx.scale = scale
@@ -346,28 +369,44 @@ class Flash_attention_triton(torch.autograd.Function):
             L.stride(0), L.stride(1),
             N_QUERIES, N_KEYS,
             scale,
-            D,
+            D_padded,
             Q_TILE_SIZE = Q_TILE_SIZE,
             K_TILE_SIZE = K_TILE_SIZE,
             is_causal = is_causal
         )
         ctx.save_for_backward(L, Q, K, V, O)
-        return O
+        
+        # Remove padding from output before returning
+        if D_padded != D:
+            O = O[..., :D]
+        
+        return O.view(original_shape)
 
     @staticmethod
     def backward(ctx, grad_O):
         L, Q, K, V, O = ctx.saved_tensors
         scale = ctx.scale
         is_causal = ctx.is_causal
-        batch_size, N_QUERIES, D = Q.shape
+        original_shape = ctx.original_shape
+        D_original = ctx.D_original
+        D_padded = ctx.D_padded
+        
+        batch_size, N_QUERIES, _ = Q.shape  # Q is already padded
         N_KEYS = K.shape[-2]
+        
+        # Pad grad_O if necessary
+        grad_O = grad_O.view(-1, N_QUERIES, D_original)
+        if D_padded != D_original:
+            pad_size = D_padded - D_original
+            grad_O = torch.nn.functional.pad(grad_O, (0, pad_size), mode='constant', value=0)
+        
         D_i = torch.sum(O * grad_O, dim=-1)  # Shape: (batch_size, seq_len)
         # triton backward
-        Q_TILE_SIZE = 32  # Reduced from 256 to 64， 不能太大了，shared memory空间有限
-        K_TILE_SIZE = 32 # Reduced from 256 to 64
-        dQ = torch.empty((batch_size, N_QUERIES, D), device=Q.device, dtype=Q.dtype)
-        dK = torch.empty((batch_size, N_KEYS, D), device=Q.device, dtype=Q.dtype)
-        dV = torch.empty((batch_size, N_KEYS, D), device=Q.device, dtype=Q.dtype)
+        Q_TILE_SIZE = 16  # Reduced from 256 to 64， 不能太大了，shared memory空间有限
+        K_TILE_SIZE = 16 # Reduced from 256 to 64
+        dQ = torch.empty((batch_size, N_QUERIES, D_padded), device=Q.device, dtype=Q.dtype)
+        dK = torch.empty((batch_size, N_KEYS, D_padded), device=Q.device, dtype=Q.dtype)
+        dV = torch.empty((batch_size, N_KEYS, D_padded), device=Q.device, dtype=Q.dtype)
         # compute dQ
         grid = (triton.cdiv(N_QUERIES, Q_TILE_SIZE), batch_size)
         flash_bwd_dq_kernel[grid](
@@ -380,7 +419,7 @@ class Flash_attention_triton(torch.autograd.Function):
             D_i.stride(0), D_i.stride(1),
             N_QUERIES, N_KEYS,
             scale,
-            D,
+            D_padded,
             Q_TILE_SIZE = Q_TILE_SIZE,
             K_TILE_SIZE = K_TILE_SIZE,
             is_causal = is_causal
@@ -397,12 +436,19 @@ class Flash_attention_triton(torch.autograd.Function):
             D_i.stride(0), D_i.stride(1),
             N_QUERIES, N_KEYS,
             scale,
-            D,
+            D_padded,
             Q_TILE_SIZE = Q_TILE_SIZE,
             K_TILE_SIZE = K_TILE_SIZE,
             is_causal = is_causal
         )
-        return dQ, dK, dV, None
+        
+        # Remove padding from gradients before returning
+        if D_padded != D_original:
+            dQ = dQ[..., :D_original]
+            dK = dK[..., :D_original]
+            dV = dV[..., :D_original]
+        
+        return dQ.view(original_shape), dK.view(original_shape), dV.view(original_shape), None
         #################
         S = (Q @ K.transpose(-1, -2)) * scale # 需要对S进行causal mask，后面的P_ij, dS_ij自动就mask了
 class Flash_attention_pytorch(torch.autograd.Function):
@@ -449,12 +495,12 @@ class Flash_attention_pytorch(torch.autograd.Function):
         scale = ctx.scale
         is_causal = ctx.is_causal
         batch_size,N_QUERIES = Q.shape[:-1]
-        N_KEYS = K.shape[0-2]
+        N_KEYS = K.shape[-2]
         # D_i should be the sum of element-wise multiplication along the last dimension
         D_i = torch.sum(O * grad_O, dim=-1)  # Shape: (batch_size, seq_len)
         S = (Q @ K.transpose(-1, -2)) * scale # 需要对S进行causal mask，后面的P_ij, dS_ij自动就mask了
         if is_causal:
-            causal_mask = torch.arange(0,N_QUERIES)[...,None] >= torch.arange(0,N_KEYS)[...,None,:]
+            causal_mask = torch.arange(N_QUERIES)[...,None] >= torch.arange(N_KEYS)[...,None,:]
             causal_mask = causal_mask.to(Q.device)
             S = torch.where(causal_mask, S, torch.full_like(S, -1e6))
         P_ij = torch.exp(S - L[...,None])
