@@ -20,8 +20,14 @@ def annotated_scaled_dot_product_attention(q, k, v, mask=None, softmax=torch.sof
     with nvtx.range("final matmul"):
         result = result @ v
     return result
-def benchmark(d_model, d_ff, num_layers, num_heads, size):
-    basic_modules.scaled_dot_product_attention = annotated_scaled_dot_product_attention
+@nvtx.range("triton implemented scaled dot product attention")
+def apply_flash_atn_triton(q, k, v, mask=None, softmax=torch.softmax):
+    return Flash_attention_triton.apply(q, k, v, is_causal=True)
+def benchmark(d_model, d_ff, num_layers, num_heads, size, type):
+    if type == 'normal':
+        basic_modules.scaled_dot_product_attention = annotated_scaled_dot_product_attention
+    if type == 'triton':
+        basic_modules.scaled_dot_product_attention = apply_flash_atn_triton
     device = config['device']
     # 1. prepare model
     transformer_lm = My_transformer_lm(vocab_size=config['vocab_size'], context_length=config['context_length'], d_model=d_model, num_layers=num_layers, num_heads=num_heads, d_ff=d_ff, rope_theta=config['rope_theta'])
@@ -130,11 +136,23 @@ if __name__ == "__main__":
         "num_heads":[12, 16, 20, 25, 32],
         "size":['small','medium','large','xl','2.7B']
     }
-    for i in range(1):
+    print("-------------------------------")
+    print("测试普通attention耗时")
+    for i in range(5):
+        type = "normal"
         d_model = model_size_dict['d_model'][i]
         d_ff = model_size_dict['d_ff'][i]
         num_layers = model_size_dict['num_layers'][i]
         num_heads = model_size_dict['num_heads'][i]
         size = model_size_dict['size'][i]
-        benchmark(d_model, d_ff, num_layers, num_heads, size)
+        benchmark(d_model, d_ff, num_layers, num_heads, size, type)
+    print("测试triton实现attention耗时")
+    for i in range(1):
+        type = "triton"
+        d_model = model_size_dict['d_model'][i]
+        d_ff = model_size_dict['d_ff'][i]
+        num_layers = model_size_dict['num_layers'][i]
+        num_heads = model_size_dict['num_heads'][i]
+        size = model_size_dict['size'][i]
+        benchmark(d_model, d_ff, num_layers, num_heads, size, type)
     

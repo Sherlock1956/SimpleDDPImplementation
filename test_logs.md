@@ -1,4 +1,12 @@
-# Benchmarking
+# 说明
+
+本文件为完成cs336_assignment2的与benchmarking和triton相关的实现，每一个一组标题对应一个[官方作业指导说明书](./cs336_spring2025_assignment2_systems.pdf)中的一个需要自己实现的部分。每个部分的要求以及相关指导在指导书中有详细描述。如果涉及到相关代码，在每个一组标题下会单独标注在项目中的代码位置。
+
+**举例** 以benchmarking_script为例，对应说明书中P3中的图示部分，代码位置是在
+
+![image-9](./assets/image9.png)
+
+# benchmarking_script
 
 run on 4090D autodl platform
 
@@ -336,7 +344,7 @@ Seq_len: 16384, PyTorch time: 0.0956s, Flash time: 2.7439s
 
 # flash_benchmarking
 
-在用triton实现了前向传播的基础上，使用flash attention中的recomputation实现backward pass，用pytorch实现（先不用triton实现）
+在用triton实现了前向传播的基础上，使用flash attention中的recomputation实现backward pass，用pytorch+compile实现（先不用triton实现）
 
 | d_model | seq_len | Forward (100 passes) | Backward (100 passes) | Memory Reserved (MB) | Memory Allocated (MB) |
 | ------- | ------- | -------------------- | --------------------- | -------------------- | --------------------- |
