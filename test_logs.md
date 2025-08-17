@@ -4,9 +4,13 @@
 
 **举例** 以benchmarking_script为例，对应说明书中P3中的图示部分，代码位置是在
 
-![image-9](./assets/image9.png)
+![image-9](assets/image9.png)
+
+# 1 Benchmarking and Flash Attention
 
 # benchmarking_script P3
+
+代码位置：tests/benchmarking_script.py
 
 run on 4090D autodl platform
 
@@ -18,21 +22,25 @@ run on 4090D autodl platform
 
 # nsys_profile  P5
 
+代码位置：tests/benchmarking_script.py
+
+运行方式：nsys profile -o result python tests/benchmarking_script.py
+
 主要学习nsight system的基本使用，包括用nvtx标注感兴趣代码位置，用nsys收集数据，用nsight system打开，察看耗时等等
 
 (a) 在cpu上的前向传播和反向传播的nvtx标记和timeit测试出来的基本一致
 
 (b)在单次前向传播过程中，调用次数最多的是ampere_sgemm_...这个矩阵乘法kernel，一次前向传播调用了85次（small size），如果包含前向和反向传播，也是这个kernel执行次数最多，次数也是85次
 
-![image-1](./assets/image1.png)
+![image-1](assets/image1.png)
 
-![image-2](./assets/image2.png)
+![image-2](assets/image2.png)
 
 (c)除了矩阵乘法之后，elementwise_kernel也占了不少的计算，例如加法、乘法、ReLU、Sigmoid 等。这种 kernel 在深度学习中大量出现，因为很多激活函数、loss 函数、张量变换都属于逐元素操作。
 
 (d)测试一轮完整的前向传播+反向传播+优化器更新，占比最多的还是矩阵乘法，但是占比稍微下降，因为优化器更新中有大量的逐元素的更新操作，相比仅前向传播的66.4%占比下降到47.3%
 
-![image-3](./assets/image3.png)
+![image-3](assets/image3.png)
 
 (e)测试一次前向传播中一个attention中的矩阵乘法和softmax的时间消耗之比和两者FLOPS之比，观察是否有什么现象。
 
@@ -58,7 +66,7 @@ final matmul和computing softmax的FLOPS比例：42.7
 
 final matmul和computing softmax的Time比例：2.2
 
-![image-4](./assets/image4.png)
+![image-4](assets/image4.png)
 
 **结论：虽然 softmax 的 FLOPS 很小，但由于其 memory-bound、本身结构复杂、指令混合率差，导致执行时间并不成比例地小。相比之下，GEMM 虽然 FLOPS 巨大，但因为其是 compute-bound 且高度优化，反而执行时间较短或与 softmax 相近。**
 
@@ -112,6 +120,8 @@ for i in range(15):
 
 # mixed_precision_accumulation  P6
 
+代码位置：tests/mixed_presicion_accumulations.py
+
 ```python
 import torch
 s = torch.tensor(0,dtype=torch.float32)
@@ -134,6 +144,7 @@ print(s)
 ```
 
 代码运行结果：
+
 ```BASH
 tensor(10.0001)
 tensor(9.9531, dtype=torch.float16)
@@ -144,6 +155,8 @@ tensor(10.0021)
 说明在累加时低精度会导入累加误差较大，累加过程需要使用高精度
 
 # benchmarking_mixed_precision  P7
+
+代码位置：tests/benchmarking_script.py
 
 全精度：
 
@@ -197,21 +210,23 @@ layer norm需要计算方差，均值，对数值敏感，而fp16动态范围小
 
 # memory_profiling  P8
 
+代码位置：tests/benchmarking_script.py
+
 用torch.cuda.memory._record_memory_history(*max_entries*=1000000)来记录模型运行时显存使用情况
 
 (a)分别测试仅前向传播和一步完整的更新
 
 全精度
 
-![image-5](./assets/image5.png)
+![image-5](assets/image5.png)
 
-![image-6](./assets/image6.png)
+![image-6](assets/image6.png)
 
 混合精度
 
-![image-7](./assets/image7.png)
+![image-7](assets/image7.png)
 
-![image-8](./assets/image8.png)
+![image-8](assets/image8.png)
 
 (b)内存峰值是什么？
 
@@ -222,6 +237,8 @@ layer norm需要计算方差，均值，对数值敏感，而fp16动态范围小
 (e)调节detail这一项，占用显存最多的是哪个部分，这个暂时还不太会看，不过显示的很多都是basic_modules.py中的一个forward函数，大小都是24MB左右，如果是看单个最大的话，峰值处的计算cross entropy loss分配了78MB，是最大的，不太确定是不是这个意思。
 
 # pytorch_attention P9
+
+代码位置：tests/benchmarking_attention.py
 
 测试普通的attention在不同数据规模下的耗时
 
@@ -254,6 +271,8 @@ layer norm需要计算方差，均值，对数值敏感，而fp16动态范围小
 
 # torch_compile  P10
 
+代码位置：tests/benchmarking_script.py
+
 使用torch.compile(model)进行模型优化，测试速度明显变快，reserved memory也变少了
 
 | d_model | seq_len | Forward (100 passes) | Backward (100 passes) | Memory Reserved (MB) | Memory Allocated (MB) |
@@ -282,8 +301,11 @@ layer norm需要计算方差，均值，对数值敏感，而fp16动态范围小
 # Flash attention学习笔记
 
 [推荐观看b站视频](https://www.bilibili.com/video/BV1UT421k7rA/?spm_id_from=333.1391.0.0&vd_source=cacd898e44cd6114d93337514538a038)
+并且结合指导书P18，和P23中的算法伪代码来学习。
 
 # flash_forward P19
+
+代码位置：tests/flash_attention_modules.py
 
 (a)用pytorch实现flash attention2的操作
 
@@ -330,6 +352,8 @@ Seq_len: 16384, PyTorch time: 0.0956s, Flash time: 2.7439s
 
 # flash_benchmarking P21
 
+代码位置：tests/benchmarking_attention.py
+
 在用triton实现了前向传播的基础上，使用flash attention中的recomputation实现backward pass，再用triton实现backward，实现flash attention的完整triton算子
 
 下表是backward由pytorch实现，因为测试时出现了无法解决的Error: CUDA error: an illegal memory access was encountered错误，分析之后发现在d_model, seq_len较大的时候会出现这个错误，应该是shared_memory不够导致的这个问题。
@@ -364,6 +388,8 @@ Seq_len: 16384, PyTorch time: 0.0956s, Flash time: 2.7439s
 # 补充任务
 
 将triton实现的flash attention替换完整大模型中的attention来测试加速效果
+
+代码位置：tests/benchmarking_script.py
 
 测试数据输入维度：(1,1024)
 
@@ -408,3 +434,16 @@ Seq_len: 16384, PyTorch time: 0.0956s, Flash time: 2.7439s
 - out of resource: shared memory, Required: 328832, Hardware limit: 101376. Reducing block sizes or `num_stages` may help.
 
 在写triton的时候需要设置tile_size，如果设置的太大则在SRAM中使用的空间就会超过上限出现这个错误，所以需要动态灵活调整tile_size
+
+# 学习笔记
+
+![image-13](assets/image13.jpg)
+![image-14](assets/image14.jpg)
+
+# 2 Distributed Data Parallel Training
+
+# DDP_allreduce_demo P24
+
+如果是在多GPU训练中，需要保证不同的进程使用不同的GPU。
+方法1: 使用torch.cuda.set_device(rank)，然后再使用tensor.to("cuda")的时候就会自动放到指定的GPU上
+方法2: 使用device = f"cuda:{rank}"然后使用tensor.to(device)即可
