@@ -42,7 +42,6 @@ def benchmarking(backend, process, data_size):
     print(f"Average time: {avg_time*1000:.2f}ms\n")
 if __name__ == "__main__":
     backends = ["gloo","nccl"]
-    backends = ["gloo"]
     processes = [2, 4, 6]
     datasizes = [1, 10, 100, 1000] # MB
     for backend, process, data_size in itertools.product(backends, processes, datasizes):
