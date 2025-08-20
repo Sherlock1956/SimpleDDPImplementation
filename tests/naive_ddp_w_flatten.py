@@ -25,22 +25,33 @@ def sync_model_params(model: nn.Module):
     for param in model.parameters():
         dist.all_reduce(param,op=dist.ReduceOp.SUM,async_op=False)
         param.data = param.data / dist.get_world_size()
-def sync_model_grad(model: nn.Module):
+def sync_model_grad(model: nn.Module,flatten):
     grads = []
-    for param in model.parameters():
-        if param.grad is not None:
-            grads.append(param.grad)
-            # dist.all_reduce(param.grad,op=dist.ReduceOp.SUM,async_op=False)
-            # param.grad.data = param.grad.data / dist.get_world_size()
-    flattened_grads = torch._utils._flatten_dense_tensors(grads)
-    dist.all_reduce(flattened_grads, op=dist.ReduceOp.SUM,async_op=False)
-    flattened_grads = flattened_grads / dist.get_world_size()
-    unflattened_grad = torch._utils._unflatten_dense_tensors(flattened_grads, grads)
-    for i, param in enumerate(model.parameters()):
-        if param.grad is not None:
-            param.grad = unflattened_grad[i]
-def distributed(rank, world_size, backend):
+    if flatten == True:
+        for param in model.parameters():
+            if param.grad is not None:
+                grads.append(param.grad)
+                # dist.all_reduce(param.grad,op=dist.ReduceOp.SUM,async_op=False)
+                # param.grad.data = param.grad.data / dist.get_world_size()
+        flattened_grads = torch._utils._flatten_dense_tensors(grads)
+        dist.all_reduce(flattened_grads, op=dist.ReduceOp.SUM,async_op=False)
+        flattened_grads = flattened_grads / dist.get_world_size()
+        unflattened_grad = torch._utils._unflatten_dense_tensors(flattened_grads, grads)
+        for i, param in enumerate(model.parameters()):
+            if param.grad is not None:
+                param.grad = unflattened_grad[i]
+    else:
+        for param in model.parameters():
+            if param.grad is not None:
+                grads.append(param.grad)
+                dist.all_reduce(param.grad,op=dist.ReduceOp.SUM,async_op=False)
+                param.grad.data = param.grad.data / dist.get_world_size()
+def distributed(rank, world_size, backend, warmup, flatten):
     setup(rank, world_size, backend)
+    if warmup == True and rank == 0:
+        print("warmup......")
+    if warmup == False and rank == 0:
+        print("training......")
     if backend == 'nccl':
         device = f"cuda:{rank}"
     else:
@@ -49,40 +60,41 @@ def distributed(rank, world_size, backend):
     sync_model_params(model)
     optimizer = torch.optim.SGD(model.parameters(),lr = 0.00001)
     batched_x = torch.rand((8, 1024, 3),dtype=torch.float32,requires_grad=True,device=device)
-    if rank == 0:
+    if rank == 0 and warmup is not True:
         full_time = []
         sync_time = []
-    for _ in range(1000):
-        if rank == 0:
+    for _ in range(5000):
+        if rank == 0 and warmup is not True:
             start = time.time()
         output = model(batched_x)
         loss = loss_func(output)
         optimizer.zero_grad()
         loss.backward()
-        if rank == 0:
+        if rank == 0 and warmup is not True:
             sync_start = time.time()
-        sync_model_grad(model)
-        if rank == 0:
+        sync_model_grad(model,flatten)
+        if rank == 0 and warmup is not True:
             sync_end = time.time()
         optimizer.step()
-        if rank == 0:
+        if rank == 0 and warmup is not True:
             end = time.time()
             full_time.append(end - start)
             sync_time.append(end - start - (sync_end - sync_start))
-            print(f"loss:{loss.item()}")
-    if rank == 0:
+            # print(f"loss:{loss.item()}")
+    if rank == 0 and warmup is not True:
+        print(f"use flatten: {flatten}")
         print(f"average full time: {sum(full_time) / len(full_time)}")
         print(f"average sync time: {sum(sync_time) / len(sync_time)}")
-def ddp_train(backend, process):
+def ddp_train(backend, process, warmup, flatten=True):
     world_size = process
-    mp.spawn(fn=distributed, args=(world_size,backend),nprocs=world_size,join=True)
+    mp.spawn(fn=distributed, args=(world_size,backend,warmup,flatten),nprocs=world_size,join=True)
 if __name__ == "__main__":
     type = 'ddp'
     if type == 'single':
         model = Toymodel().to('mps')
         optimizer = torch.optim.SGD(model.parameters(),lr = 0.00001)
         batched_x = torch.rand((8, 1024, 3),dtype=torch.float32,device='mps',requires_grad=True)
-        for _ in range(1000):
+        for _ in range(5000):
             output = model(batched_x)
             loss = loss_func(output)
             optimizer.zero_grad()
@@ -96,5 +108,7 @@ if __name__ == "__main__":
         else:
             backend = 'gloo'  # 如果GPU不够，回退到CPU训练
             process = 2
-        ddp_train(backend, process)
+        ddp_train(backend, process, warmup=True)
+        ddp_train(backend, process, warmup=False, flatten=True)
+        ddp_train(backend, process, warmup=False, flatten=False)
     
