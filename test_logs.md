@@ -476,6 +476,8 @@ Seq_len: 16384, PyTorch time: 0.0956s, Flash time: 2.7439s
 
 # naive_ddp_benchmarking
 
+**注意**：在所有的benchmark测试运行速度的脚本中，都需要写好warmup和synchronize操作，才能测试出真实时间
+
 写一个最简单的双卡训练数据并行，不使用DDP模块，直接手动实现数据reduce操作，在两张4090D的运行一个toymodel,结果如下：
 average full time: 0.0030654694080352782s
 average sync time: 0.0009572507381s
@@ -488,14 +490,17 @@ average sync time: 0.0009572507381s
 
 使用torch.\_utils.\_flatten_dense_tensors将需要reduce的参数合并成一个再reduce，结果如下：
 use flatten: True
-average full time: 0.3454420971870422s
-average sync time: 0.0033918523788452146s
-
+average full time: 0.35084120988845824
+average sync time: 0.23028345108032228
 use flatten: False
-average full time: 0.36239158153533935s
-average sync time: 0.01034224510192871s
+average full time: 0.3580984902381897
+average sync time: 0.2299296021461487
 
-可以看到使用flatten之后梯度同步时间下降到了1/3
+发现使用flatten之后作用不大，分析可能的原因：
+
+- 在需要多次调用all_reduce，每次都是小tensor的情况下才会有比较大的提升
+
+- 使用的大模型层数不大，启动次数并不多，启动开销完全不如通信开销大，通信瓶颈在传输数据上，不在启动上
 
 # ddp_overlap_individual_parameters
 
@@ -515,3 +520,10 @@ average sync time: 0.01034224510192871s
 - 在执行到all_reduce操作且同步的时候，python进程会阻塞，直到当前操作被排到CUDA流中，注意排入并不等于CUDA执行完成，CUDA会顺序执行所有流中的操作，和python进程是异步关系，如果python进程调用torch.cuda.synchronize()，python进程将会等待CUDA所有操作完成。
 
 - 在执行到all_reduce操作且异步的时候，会从all_reduce函数获得一个handle的返回值，不等待操作排入CUDA流，除非显式调用handle.wait()，则会保证操作排入CUDA流，但是也无法保证CUDA执行完成。在得到handle返回值和wait()之间可以做一些其他的操作，来将同步和计算重叠，加速训练过程。
+
+问题3: 如何将梯度计算和梯度通信进行重叠？
+
+- 为模型中的每个参数都增加一个钩子函数，使用*register_post_accumulate_grad_hook*，在loss.backward计算了该参数的梯度之后，就调用通信函数all_reduce
+- 在通信函数中需要使用async_op = True来保证主线程不被阻塞，让所有参数在执行完完backward更新了梯度之后马上调用all_reducd，且不阻塞，继续计算后续的参数梯度
+- 在loss.backward()执行完成之后，就已经有一些参数的梯度被all_reduce完成了，为了保证进程的正确性，在optimizer.step()之前依次调用所有参数的all_reduce的返回handle的wait()函数，保证所有的all_recude都被提交到GPU上
+- 在所有wait()都执行完成之后就可以调用optimizer.step()函数，来更新所有的参数。
