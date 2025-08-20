@@ -21,7 +21,7 @@ def loss_func(x):
     return torch.sum(x**2)
 def setup(rank, world_size, backend):
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "29500"
+    os.environ["MASTER_PORT"] = "29100"
     dist.init_process_group(backend=backend,rank=rank,world_size=world_size)
 def sync_model_params(model: nn.Module):
     for param in model.parameters():
@@ -58,39 +58,43 @@ def distributed(rank, world_size, backend, warmup, flatten):
         device = 'cpu'
     # model = Toymodel().to(device=device)
     # 1. prepare model
-    transformer_lm = My_transformer_lm(vocab_size=10000, context_length=256, d_model=1024, num_layers=24, num_heads=16, d_ff=4096, rope_theta=10000)
-    transformer_lm.to(device)
-    sync_model_params(model)
+    model = My_transformer_lm(vocab_size=10000, context_length=256, d_model=1024, num_layers=24, num_heads=16, d_ff=4096, rope_theta=10000)
+    model.to(device)
+    with torch.no_grad():
+        sync_model_params(model)
     # optimizer = torch.optim.SGD(model.parameters(),lr = 0.00001)
     # batched_x = torch.rand((8, 1024, 3),dtype=torch.float32,requires_grad=True,device=device)
-    optimizer = My_AdamW(transformer_lm.parameters(), lr=0.00001)
+    optimizer = My_AdamW(model.parameters(), lr=0.00001)
     batched_data_x = torch.randint(0,10000,(1,256)).to(device)
     batched_data_y = torch.zeros_like(batched_data_x)
     if rank == 0 and warmup is not True:
         full_time = []
         sync_time = []
-    for _ in range(5000):
+    for _ in (range(100)):
         if rank == 0 and warmup is not True:
             start = time.time()
-        output = model(batched_x)
+        output = model(batched_data_x)
         loss = My_cross_entropy(output, batched_data_y)
         optimizer.zero_grad()
         loss.backward()
         if rank == 0 and warmup is not True:
             sync_start = time.time()
-        sync_model_grad(model,flatten)
+        with torch.no_grad():
+            sync_model_grad(model,flatten)
         if rank == 0 and warmup is not True:
             sync_end = time.time()
         optimizer.step()
         if rank == 0 and warmup is not True:
             end = time.time()
             full_time.append(end - start)
-            sync_time.append(end - start - (sync_end - sync_start))
-            print(f"loss:{loss.item()}")
+            sync_time.append(sync_end - sync_start)
+            # print(f"loss:{loss.item()}")
     if rank == 0 and warmup is not True:
         print(f"use flatten: {flatten}")
         print(f"average full time: {sum(full_time) / len(full_time)}")
         print(f"average sync time: {sum(sync_time) / len(sync_time)}")
+    # 确保所有进程同步后再退出
+    dist.barrier()
 def ddp_train(backend, process, warmup, flatten=True):
     world_size = process
     mp.spawn(fn=distributed, args=(world_size,backend,warmup,flatten),nprocs=world_size,join=True)
@@ -100,7 +104,7 @@ if __name__ == "__main__":
         model = Toymodel().to('mps')
         optimizer = torch.optim.SGD(model.parameters(),lr = 0.00001)
         batched_x = torch.rand((8, 1024, 3),dtype=torch.float32,device='mps',requires_grad=True)
-        for _ in range(5000):
+        for _ in range(100):
             output = model(batched_x)
             loss = loss_func(output)
             optimizer.zero_grad()
