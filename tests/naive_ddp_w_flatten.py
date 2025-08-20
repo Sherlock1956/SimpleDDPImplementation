@@ -4,6 +4,8 @@ import torch.multiprocessing as mp
 import os
 import torch.distributed as dist
 import time 
+from basic_modules import *
+import basic_modules
 class Toymodel(nn.Module):
     def __init__(self):
         super().__init__()
@@ -31,8 +33,6 @@ def sync_model_grad(model: nn.Module,flatten):
         for param in model.parameters():
             if param.grad is not None:
                 grads.append(param.grad)
-                # dist.all_reduce(param.grad,op=dist.ReduceOp.SUM,async_op=False)
-                # param.grad.data = param.grad.data / dist.get_world_size()
         flattened_grads = torch._utils._flatten_dense_tensors(grads)
         dist.all_reduce(flattened_grads, op=dist.ReduceOp.SUM,async_op=False)
         flattened_grads = flattened_grads / dist.get_world_size()
@@ -56,10 +56,16 @@ def distributed(rank, world_size, backend, warmup, flatten):
         device = f"cuda:{rank}"
     else:
         device = 'cpu'
-    model = Toymodel().to(device=device)
+    # model = Toymodel().to(device=device)
+    # 1. prepare model
+    transformer_lm = My_transformer_lm(vocab_size=10000, context_length=256, d_model=1024, num_layers=24, num_heads=16, d_ff=4096, rope_theta=10000)
+    transformer_lm.to(device)
     sync_model_params(model)
-    optimizer = torch.optim.SGD(model.parameters(),lr = 0.00001)
-    batched_x = torch.rand((8, 1024, 3),dtype=torch.float32,requires_grad=True,device=device)
+    # optimizer = torch.optim.SGD(model.parameters(),lr = 0.00001)
+    # batched_x = torch.rand((8, 1024, 3),dtype=torch.float32,requires_grad=True,device=device)
+    optimizer = My_AdamW(transformer_lm.parameters(), lr=0.00001)
+    batched_data_x = torch.randint(0,10000,(1,256)).to(device)
+    batched_data_y = torch.zeros_like(batched_data_x)
     if rank == 0 and warmup is not True:
         full_time = []
         sync_time = []
@@ -67,7 +73,7 @@ def distributed(rank, world_size, backend, warmup, flatten):
         if rank == 0 and warmup is not True:
             start = time.time()
         output = model(batched_x)
-        loss = loss_func(output)
+        loss = My_cross_entropy(output, batched_data_y)
         optimizer.zero_grad()
         loss.backward()
         if rank == 0 and warmup is not True:
@@ -80,7 +86,7 @@ def distributed(rank, world_size, backend, warmup, flatten):
             end = time.time()
             full_time.append(end - start)
             sync_time.append(end - start - (sync_end - sync_start))
-            # print(f"loss:{loss.item()}")
+            print(f"loss:{loss.item()}")
     if rank == 0 and warmup is not True:
         print(f"use flatten: {flatten}")
         print(f"average full time: {sum(full_time) / len(full_time)}")

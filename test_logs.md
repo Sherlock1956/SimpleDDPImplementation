@@ -481,3 +481,18 @@ average full time: 0.0030654694080352782
 average sync time: 0.0021082186698913575
 
 可以看到同步的模块花了将近2/3的时间，所以手动实现显卡之间数据reduce开销比较大，需要优化。
+
+# minimal_ddp_flat_benchmarking
+
+使用torch._utils._flatten_dense_tensors将需要reduce的参数合并成一个再reduce，结果如下：
+使用一个非常小的toymodel，参数量只有131个:
+
+use flatten: False
+average full time: 2.4746572971343994ms
+average sync time:1.6685542106628418ms
+
+use flatten: True
+average full time: 2.3929722309112547ms
+average sync time: 1.8670578956604003ms
+
+使用非常小的模型的时候，使用flatten时间反而更长了，因为参数量小，flatten技术反而引入了额外的overhead
