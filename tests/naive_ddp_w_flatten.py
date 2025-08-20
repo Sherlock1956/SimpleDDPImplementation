@@ -86,6 +86,7 @@ def distributed(rank, world_size, backend, warmup, flatten):
         if rank == 0 and warmup is not True:
             sync_end = time.time()
         optimizer.step()
+        torch.cuda.synchronize()
         if rank == 0 and warmup is not True:
             end = time.time()
             full_time.append(end - start)
