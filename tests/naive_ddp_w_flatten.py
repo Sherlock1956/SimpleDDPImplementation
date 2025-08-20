@@ -77,10 +77,12 @@ def distributed(rank, world_size, backend, warmup, flatten):
         loss = My_cross_entropy(output, batched_data_y)
         optimizer.zero_grad()
         loss.backward()
+        torch.cuda.synchronize()
         if rank == 0 and warmup is not True:
             sync_start = time.time()
         with torch.no_grad():
             sync_model_grad(model,flatten)
+            torch.cuda.synchronize()
         if rank == 0 and warmup is not True:
             sync_end = time.time()
         optimizer.step()

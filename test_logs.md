@@ -477,22 +477,41 @@ Seq_len: 16384, PyTorch time: 0.0956s, Flash time: 2.7439s
 # naive_ddp_benchmarking
 
 写一个最简单的双卡训练数据并行，不使用DDP模块，直接手动实现数据reduce操作，在两张4090D的运行一个toymodel,结果如下：
-average full time: 0.0030654694080352782
-average sync time: 0.0021082186698913575
+average full time: 0.0030654694080352782s
+average sync time: 0.0009572507381s
 
-可以看到同步的模块花了将近2/3的时间，所以手动实现显卡之间数据reduce开销比较大，需要优化。
+可以看到同步的模块花了将近1/3的时间，所以手动实现显卡之间数据reduce开销比较大，需要优化。
 
 # minimal_ddp_flat_benchmarking
 
-使用torch._utils._flatten_dense_tensors将需要reduce的参数合并成一个再reduce，结果如下：
-使用一个非常小的toymodel，参数量只有131个:
+这次测试使用了mediun size的大模型，d_model: 1024 d_ff: 4096 num_layers: 24 num_heads: 16 parameters: 0.423B
+
+使用torch.\_utils.\_flatten_dense_tensors将需要reduce的参数合并成一个再reduce，结果如下：
+use flatten: True
+average full time: 0.3454420971870422s
+average sync time: 0.0033918523788452146s
 
 use flatten: False
-average full time: 2.4746572971343994ms
-average sync time:1.6685542106628418ms
+average full time: 0.36239158153533935s
+average sync time: 0.01034224510192871s
 
-use flatten: True
-average full time: 2.3929722309112547ms
-average sync time: 1.8670578956604003ms
+可以看到使用flatten之后梯度同步时间下降到了1/3
 
-使用非常小的模型的时候，使用flatten时间反而更长了，因为参数量小，flatten技术反而引入了额外的overhead
+# ddp_overlap_individual_parameters
+
+这一节需要深入理解GPU执行的异步性，以及多线程之间all_reduce操作的同步、异步性
+
+问题1: 在之前的代码中是如何保证GPU执行异步性的同步，optimizer.step()不出错的？
+
+- 原因是：
+  1. 同一 stream 顺序保证：先 all_reduce，再 step。
+  2. NCCL collective 本身会卡到所有进程进入 collective，再把 kernel 排进 stream。
+- 所以 optimizer.step() 一定是等 sync_model_grad() 的 all_reduce 已经在CUDA流中排好，并且 GPU 会顺序执行的。
+
+问题2: 在all_reduce中的python进程和GPU实际操作之间有什么关系？
+
+以python进程的角度看待的话
+
+- 在执行到all_reduce操作且同步的时候，python进程会阻塞，直到当前操作被排到CUDA流中，注意排入并不等于CUDA执行完成，CUDA会顺序执行所有流中的操作，和python进程是异步关系，如果python进程调用torch.cuda.synchronize()，python进程将会等待CUDA所有操作完成。
+
+- 在执行到all_reduce操作且异步的时候，会从all_reduce函数获得一个handle的返回值，不等待操作排入CUDA流，除非显式调用handle.wait()，则会保证操作排入CUDA流，但是也无法保证CUDA执行完成。在得到handle返回值和wait()之间可以做一些其他的操作，来将同步和计算重叠，加速训练过程。
