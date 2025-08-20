@@ -4,8 +4,10 @@ import torch.multiprocessing as mp
 import os
 import torch.distributed as dist
 import time 
-from basic_modules import *
-import basic_modules
+try:
+    from basic_modules import *
+except:
+    from .basic_modules import *
 class Toymodel(nn.Module):
     def __init__(self):
         super().__init__()
@@ -23,15 +25,16 @@ def setup(rank, world_size, backend):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "29100"
     dist.init_process_group(backend=backend,rank=rank,world_size=world_size)
-def sync_model_params(model: nn.Module):
-    for param in model.parameters():
-        dist.all_reduce(param,op=dist.ReduceOp.SUM,async_op=False)
-        param.data = param.data / dist.get_world_size()
 class My_DDP(nn.Module):
-    def __init__(self, model: torch.nn.Module):
-        self.model = model
+    def __init__(self, module: torch.nn.Module):
+        super().__init__()
+        self.module = module
         self.handlers = []
-        for parameter in self.model.parameters():
+        # 使用 broadcast 而不是 all_reduce，将 rank 0 的参数广播到所有 ranks
+        with torch.no_grad():
+            for param in self.module.parameters():
+                dist.broadcast(param.data, src=0)
+        for parameter in self.module.parameters():
             if parameter.requires_grad == True:
                 parameter.register_post_accumulate_grad_hook(self.sync_model_grad_async)
     def sync_model_grad_async(self, parameter):
@@ -43,8 +46,9 @@ class My_DDP(nn.Module):
             param = handler[1]
             if param.grad is not None:
                 param.grad.data = param.grad.data / dist.get_world_size()
+        self.handlers.clear() # 需要加上这个，不然显存直接爆炸
     def forward(self, x):
-        return self.model(x)
+        return self.module(x)
 def distributed(rank, world_size, backend, warmup):
     setup(rank, world_size, backend)
     if warmup == True and rank == 0:
@@ -59,8 +63,6 @@ def distributed(rank, world_size, backend, warmup):
     # 1. prepare model
     model = My_transformer_lm(vocab_size=10000, context_length=256, d_model=1024, num_layers=24, num_heads=16, d_ff=4096, rope_theta=10000)
     model.to(device)
-    with torch.no_grad():
-        sync_model_params(model)
     model = My_DDP(model)
 
     optimizer = My_AdamW(model.parameters(), lr=0.00001)
@@ -82,9 +84,13 @@ def distributed(rank, world_size, backend, warmup):
         if rank == 0 and warmup is not True:
             end = time.time()
             full_time.append(end - start)
-            # print(f"loss:{loss.item()}")
+            print(f"loss:{loss.item()}")
     if rank == 0 and warmup is not True:
         print(f"average full time: {sum(full_time) / len(full_time)}")
+    # 确保所有进程同步后再清理
+    dist.barrier()
+    # 清理分布式进程组
+    dist.destroy_process_group()
 
 def ddp_train(backend, process, warmup):
     world_size = process

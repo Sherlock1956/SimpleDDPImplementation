@@ -6,8 +6,10 @@ import torch
 
 try:
     from flash_attention_modules import *
+    from naive_ddp_w_overlap import *
 except:
     from .flash_attention_modules import *
+    from .naive_ddp_w_overlap import *
 
 
 
@@ -58,7 +60,7 @@ def get_ddp_individual_parameters(module: torch.nn.Module) -> torch.nn.Module:
         Instance of a DDP class.
     """
     # For example: return DDPIndividualParameters(module)
-    raise NotImplementedError
+    return My_DDP(module)
 
 
 def ddp_individual_parameters_on_after_backward(ddp_model: torch.nn.Module, optimizer: torch.optim.Optimizer):
@@ -73,7 +75,7 @@ def ddp_individual_parameters_on_after_backward(ddp_model: torch.nn.Module, opti
             Optimizer being used with the DDP-wrapped model.
     """
     # For example: ddp_model.finish_gradient_synchronization()
-    raise NotImplementedError
+    ddp_model.finish_gradient_synchronization()
 
 
 def get_ddp_bucketed(module: torch.nn.Module, bucket_size_mb: float) -> torch.nn.Module:
