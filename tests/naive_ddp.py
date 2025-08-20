@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.multiprocessing as mp
 import os
 import torch.distributed as dist
+import time 
 class Toymodel(nn.Module):
     def __init__(self):
         super().__init__()
@@ -39,15 +40,30 @@ def distributed(rank, world_size, backend):
     sync_model_params(model)
     optimizer = torch.optim.SGD(model.parameters(),lr = 0.00001)
     batched_x = torch.rand((8, 1024, 3),dtype=torch.float32,requires_grad=True,device=device)
+    if rank == 0:
+        full_time = []
+        sync_time = []
     for _ in range(5000):
+        if rank == 0:
+            start = time.time()
         output = model(batched_x)
         loss = loss_func(output)
         optimizer.zero_grad()
         loss.backward()
+        if rank == 0:
+            sync_start = time.time()
         sync_model_grad(model)
+        if rank == 0:
+            sync_end = time.time()
         optimizer.step()
         if rank == 0:
+            end = time.time()
+            full_time.append(end - start)
+            sync_time.append(end - start - (sync_end - sync_start))
             print(f"loss:{loss.item()}")
+    if rank == 0:
+        print(f"average full time: {sum(full_time) / len(full_time)}")
+        print(f"average sync time: {sum(sync_time) / len(sync_time)}")
 def ddp_train(backend, process):
     world_size = process
     mp.spawn(fn=distributed, args=(world_size,backend),nprocs=world_size,join=True)
