@@ -96,7 +96,7 @@ def ddp_train(backend, process, warmup):
     world_size = process
     mp.spawn(fn=distributed, args=(world_size,backend,warmup),nprocs=world_size,join=True)
 if __name__ == "__main__":
-    type = 'ddp'
+    type = 'single'
     if type == 'single':
         model = Toymodel().to('mps')
         optimizer = torch.optim.SGD(model.parameters(),lr = 0.00001)
