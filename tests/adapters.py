@@ -5,12 +5,12 @@ from typing import Type
 import torch
 
 try:
-    # from flash_attention_modules import *
+    from flash_attention_modules import *
     from naive_ddp_w_overlap import *
     from ddp_bucketed import *
     from sharded_optimizer import *
 except:
-    # from .flash_attention_modules import *
+    from .flash_attention_modules import *
     from .naive_ddp_w_overlap import *
     from .ddp_bucketed import *
     from .sharded_optimizer import *
