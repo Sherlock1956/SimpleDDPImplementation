@@ -8,10 +8,12 @@ try:
     # from flash_attention_modules import *
     from naive_ddp_w_overlap import *
     from ddp_bucketed import *
+    from sharded_optimizer import *
 except:
     # from .flash_attention_modules import *
     from .naive_ddp_w_overlap import *
     from .ddp_bucketed import *
+    from .sharded_optimizer import *
 
 
 
@@ -147,4 +149,4 @@ def get_sharded_optimizer(params, optimizer_cls: Type[torch.optim.Optimizer], **
     Returns:
         Instance of sharded optimizer.
     """
-    raise NotImplementedError
+    return ShardedOptimizer(params, optimizer_cls, **kwargs)

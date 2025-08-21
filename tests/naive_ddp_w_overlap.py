@@ -6,8 +6,10 @@ import torch.distributed as dist
 import time 
 try:
     from basic_modules import *
+    from sharded_optimizer import *
 except:
     from .basic_modules import *
+    from .sharded_optimizer import *
 class Toymodel(nn.Module):
     def __init__(self):
         super().__init__()
@@ -49,7 +51,7 @@ class My_DDP(nn.Module):
         self.handlers.clear() # 需要加上这个，不然显存直接爆炸
     def forward(self, x):
         return self.module(x)
-def distributed(rank, world_size, backend, warmup):
+def distributed(rank, world_size, backend, warmup, sharded_opt):
     setup(rank, world_size, backend)
     if warmup == True and rank == 0:
         print("warmup......")
@@ -61,12 +63,17 @@ def distributed(rank, world_size, backend, warmup):
         device = 'cpu'
     # model = Toymodel().to(device=device)
     # 1. prepare model
-    model = My_transformer_lm(vocab_size=10000, context_length=256, d_model=1024, num_layers=24, num_heads=16, d_ff=4096, rope_theta=10000)
+    # model = My_transformer_lm(vocab_size=10000, context_length=256, d_model=1024, num_layers=24, num_heads=16, d_ff=4096, rope_theta=10000)
+    model = My_transformer_lm(vocab_size=100, context_length=32, d_model=64, num_layers=2, num_heads=2, d_ff=64, rope_theta=10000)
     model.to(device)
     model = My_DDP(model)
 
-    optimizer = My_AdamW(model.parameters(), lr=0.00001)
-    batched_data_x = torch.randint(0,10000,(1,256)).to(device)
+    if sharded_opt == True:
+        optimizer = ShardedOptimizer(model.parameters(), My_AdamW, lr=1e-5)
+    else:
+        optimizer = My_AdamW(model.parameters(), lr=0.00001)
+    # batched_data_x = torch.randint(0,10000,(1,256)).to(device)
+    batched_data_x = torch.randint(0,10000,(1,32)).to(device)
     batched_data_y = torch.zeros_like(batched_data_x)
     if rank == 0 and warmup is not True:
         full_time = []
@@ -92,11 +99,11 @@ def distributed(rank, world_size, backend, warmup):
     # 清理分布式进程组
     dist.destroy_process_group()
 
-def ddp_train(backend, process, warmup):
+def ddp_train(backend, process, warmup, sharded_opt):
     world_size = process
-    mp.spawn(fn=distributed, args=(world_size,backend,warmup),nprocs=world_size,join=True)
+    mp.spawn(fn=distributed, args=(world_size,backend,warmup,sharded_opt),nprocs=world_size,join=True)
 if __name__ == "__main__":
-    type = 'single'
+    type = 'ddp'
     if type == 'single':
         model = Toymodel().to('mps')
         optimizer = torch.optim.SGD(model.parameters(),lr = 0.00001)
@@ -115,6 +122,6 @@ if __name__ == "__main__":
         else:
             backend = 'gloo'  # 如果GPU不够，回退到CPU训练
             process = 2
-        ddp_train(backend, process, warmup=True)
-        ddp_train(backend, process, warmup=False)
+        ddp_train(backend, process, warmup=True, sharded_opt=True)
+        ddp_train(backend, process, warmup=False, sharded_opt=True)
     
