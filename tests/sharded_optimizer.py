@@ -10,7 +10,7 @@ class ShardedOptimizer(torch.optim.Optimizer):
         self.rank = dist.get_rank()
         self.world_size = dist.get_world_size()
         super().__init__(params, kwargs)
-        self.optimizer = optimizer(self.local_param_group['params'], **kwargs)
+        self.optimizer = optimizer(self.local_param_group['params'], **kwargs) # 先准备好local_param_group，再实例化本地的optimizer
         
     @torch.no_grad()
     def step(self,closure=None, **kwargs):# 注意参数传递，这个closure
@@ -26,9 +26,7 @@ class ShardedOptimizer(torch.optim.Optimizer):
         # self.param_groups: List[Dict[str, Any]] = []
         # 需要考虑到传入的是多个param_group的情况
         super().add_param_group(param_group) # 先保存一份完整的模型参数
-        local_param_group: Dict[str, Any] = {'params':[]}
-        # local_param_group = {k: v for k, v in param_group.items() if k != 'params'} # 需要保存这个param_group中的其他信息
-        local_param_group['params'] = []
+        local_param_group: Dict[str, Any] = {'params':[]} # 只需要存param，不需要存其他的，因为实例化的时候有**kwargs
         for i, param in enumerate(param_group['params']):
             if i % self.world_size == self.rank:
                 local_param_group['params'].append(param)
