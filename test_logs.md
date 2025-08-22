@@ -444,13 +444,21 @@ Seq_len: 16384, PyTorch time: 0.0956s, Flash time: 2.7439s
 
 # DDP_allreduce_demo P24
 
+代码位置：tests/DDP_allreduce_demo.py
+
+了解基本的分布式代码，了解不同后端控制，all_reduce等操作
+
 如果是在多GPU训练中，需要保证不同的进程使用不同的GPU。
 方法1: 使用torch.cuda.set_device(rank)，然后再使用tensor.to("cuda")的时候就会自动放到指定的GPU上
 方法2: 使用device = f"cuda:{rank}"然后使用tensor.to(device)即可
 
 ![image-15](assets/image15.png)
 
-# distributed_communication_single_node
+# distributed_communication_single_node P26
+
+编写脚本完成单结点多进程之间在不同大小数据上的通信开销
+
+代码位置：tests/distributed_communication_single_node.py
 
 | Backend | Processes | Data Size (MB) | Individual Times (ms)                                | Average Time (ms) |
 | ------- | --------- | -------------- | ---------------------------------------------------- | ----------------- |
@@ -474,17 +482,25 @@ Seq_len: 16384, PyTorch time: 0.0956s, Flash time: 2.7439s
 3. **扩展性**：6个进程时性能下降明显，特别是在大数据量时
 4. **一致性**：同一配置下各进程的执行时间相对一致
 
-# naive_ddp_benchmarking
+# naive_ddp_benchmarking P27
+
+写一个最基本的DDP训练过程，需要all_reduce模型参数以及训练过程中的参数梯度
+
+代码位置：tests/naive_ddp_w_flatten.py
 
 **注意**：在所有的benchmark测试运行速度的脚本中，都需要写好warmup和synchronize操作，才能测试出真实时间
 
-写一个最简单的双卡训练数据并行，不使用DDP模块，直接手动实现数据reduce操作，在两张4090D的运行一个toymodel,结果如下：
+写一个最简单的双卡训练数据并行，不使用torch的DDP模块，直接手动实现数据reduce操作，在两张4090D的运行一个toymodel,结果如下：
 average full time: 0.0030654694080352782s
 average sync time: 0.0009572507381s
 
 可以看到同步的模块花了将近1/3的时间，所以手动实现显卡之间数据reduce开销比较大，需要优化。
 
-# minimal_ddp_flat_benchmarking
+# minimal_ddp_flat_benchmarking P28
+
+如果模型层数多，就会多次启动通信，可以将所有参数打包为一个tensor，触发一次通信来传输所有参数梯度
+
+代码位置：tests/naive_ddp_w_flatten.py
 
 这次测试使用了mediun size的大模型，d_model: 1024 d_ff: 4096 num_layers: 24 num_heads: 16 parameters: 0.423B
 
@@ -503,6 +519,10 @@ average sync time: 0.2299296021461487
 - 使用的大模型层数不大，启动次数并不多，启动开销完全不如通信开销大，通信瓶颈在传输数据上，不在启动上
 
 # ddp_overlap_individual_parameters
+
+尽管使用了flatten的技术，但是还是需要等所有参数的梯度都计算完才触发通信，可以将其修改为异步操作，为每个操作绑定一个hook函数，然后在loss.backward()一计算完该参数的梯度就开始通信，将梯度计算和通信进行重叠，提高效率
+
+代码位置：tests/naive_ddp_w_overlap.py
 
 这一节需要深入理解GPU执行的异步性，以及多线程之间all_reduce操作的同步、异步性
 
@@ -536,6 +556,10 @@ average full time: 0.312080545425415s
 由于是异步通信，无法统计通信所用时间，但是可以对比full time来得到结论，本次full time相比之前的同步通信加快了0.04s（14%）是一个非常明显的加速，说明异步通信可以提高显卡间通信效率。
 
 # ddp_overlap_bucketed
+
+可以将以上两种优化方法进行结合，使用flatten技术和异步通信，一个bucket内的所有参数的梯度都计算好了之后就触发异步通信
+
+代码位置：tests/ddp_bucketed.py
 
 将flatten与异步通信相结合，在反向传播计算了每个参数的梯度之后，调用勾子函数，判断当前的参数桶中的参数是否都计算好了，如果没有就等后面的参数继续计算，如果都计算好了，就将参数全部flatten成一个整体，然后异步地进行all_reduce操作，代码与之前大同小异，这里就没有自己写了，直接GPT了一下，就可以通过了。
 
@@ -597,3 +621,13 @@ average full time: 0.312080545425415s
   2. FSDP/TP
   3. PP
   4. EP（如果是 MoE 模型才需要）
+
+# Optimizer State Sharding P34
+
+以上优化都是基于DDP的通信优化，但是在多结点训练的另外一个层面也有可以优化的空间，就是优化器状态，以AdamW优化器为例，需要为每个参数保存两个状态，这就会导致需要保存两倍模型大小的额外空间，所以可以在不同结点之间共享一部分优化器状态，每个结点只负责自己的一部分参数更新，所有结点更新之后再将模型的参数进行广播同步。这样每张显卡就可以节省一部分显存。
+
+这个操作也就是Zero技术中的stage 1.
+
+本节作业就是需要手写一个优化器状态分块技术的代码，需要理解torch.optim.Optimizer类的\_\_init\_\_方法以及add_param_group函数做的事情
+
+代码位置：tests/sharded_optimizer.py
