@@ -1,7 +1,8 @@
 # SimpleDDPImplementation
-在模型越来越大的时代，通常需要采用分布式的训练方法才能完成模型的训练，比如使用torch中的DDP技术、采用Zero技术，如本身兼容的Zero的大模型训练框架（LlamaFactory+Deepspeed, Megatron+DeepSpeed）。但是有时我们对其实现原理并不充分了解，也就在调试某些Bug时陷入困境，了解分布式训练的基本原理也更有利于提升本人的代码自信。
 
-本项目是基于cs336_assignment2完成的与DDP分布式训练和Sharded Optimizer相关的实现。从最基本的torch多线程入手，学习all_reduce原理，编写benchmark代码测试通信开销，基于最基本的all_reduce实现DDP分布训练，并逐步对通信开销进行优化。最后，探索Sharded Optimizer的实现方法，手写Zero stage1代码，减少显存压力。
+随着深度学习模型规模的爆炸式增长，分布式训练已经从可选项变为必需品。无论是使用PyTorch的DDP技术、DeepSpeed的ZeRO优化，还是集成度更高的大模型训练框架（如LlamaFactory+DeepSpeed、Megatron+DeepSpeed），分布式训练都是现代AI工程师必须掌握的核心技能。然而，许多开发者虽然会使用这些工具，却对其底层实现原理缺乏深入理解，导致在遇到性能瓶颈或调试复杂Bug时束手无策。
+
+本项目基于斯坦福CS336课程的Assignment2，通过**从零实现**的方式深度剖析DDP分布式训练和Sharded Optimizer的核心机制。我们从最基础的PyTorch多进程通信开始，逐步构建完整的分布式训练系统：首先掌握all_reduce集合通信原理，然后通过性能基准测试量化通信开销，接着手工实现DDP并进行多轮优化（梯度扁平化、异步通信重叠、分桶优化），最后实现ZeRO Stage 1的优化器状态分片技术。整个学习路径既有理论深度，又有工程实践，帮助读者真正理解分布式训练的精髓。
 
 如果你觉得本项目对你有帮助，欢迎给出你的Github Star🌟，也欢迎对本人的代码批评指正，提出Github Issue / Github PR : )
 
