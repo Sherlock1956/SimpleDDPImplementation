@@ -8,6 +8,12 @@
 
 **注意**：请充分结合本人的[作业完成笔记](作业完成笔记.md)和[官方的作业指导书](cs336_spring2025_assignment2_systems.pdf)使用本项目。
 
+![image-19](./assets/image19.jpg)
+
+![image-18](./assets/image18.jpg)
+
+![image-17](./assets/image17.png)
+
 ## 项目概述
 
 本项目通过循序渐进的方式，深入探索分布式深度学习训练的核心技术，从基础的多进程通信到高级的优化器状态分片，涵盖了DDP（Distributed Data Parallel）技术栈的完整实现和优化过程。
