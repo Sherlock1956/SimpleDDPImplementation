@@ -94,7 +94,6 @@ SimpleDDPImplementation/
 
 ## 使用说明
 
-### 1. 环境安装
 - 推荐使用uv管理项目环境
 ```bash
 cd SimpleDDPImplementation
