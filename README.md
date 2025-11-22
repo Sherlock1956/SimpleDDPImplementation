@@ -106,3 +106,18 @@ cd SimpleDDPImplementation
 uv sync
 source .venv/bin/activate
 ```
+
+⚠️ Academic Honesty Notice  
+This repository contains my solutions to assignments for CS336 (2025).  
+It is shared **for educational and reference purposes only**.
+
+- ✅ You are welcome to:  
+  - Study the code to understand concepts  
+  - Run experiments locally  
+  - Cite this work (with attribution)  
+
+- ❌ Please do **NOT**:  
+  - Submit this code (or minor modifications) as your own coursework  
+  - Use it to violate your institution's academic integrity policy  
+
+If you're taking CS336 (or similar), try solving problems yourself first — you’ll learn more! 😊
